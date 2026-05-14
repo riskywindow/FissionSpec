@@ -7,6 +7,11 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
+from fissionspec.ledger import (
+    FixedPageAllocator,
+    SpeculativeLedger,
+    StaleEpochError,
+)
 from fissionspec.protocol import (
     FissionProtocol,
     InvalidMessageError,
@@ -104,6 +109,46 @@ class FissionProtocolTests(unittest.TestCase):
         self.assertEqual(protocol.active_tag, current.tag)
         applied = protocol.handle_verify_reply(VerifyReply(current.tag, hit=True))
         self.assertTrue(applied.applied)
+
+    def test_coordinator_can_map_same_round_protocol_and_ledger_retries(self) -> None:
+        protocol = FissionProtocol("r")
+        ledger = SpeculativeLedger(FixedPageAllocator(8, 4))
+        ledger.register_request("r")
+        prior_incarnation = ledger.begin("r", round_id=0)
+        ledger.abort(prior_incarnation)
+        ledger.drop_request("r")
+        ledger.register_request("r", 3)
+
+        old_message = protocol.start_verification(round_id=11)
+        old_ledger_epoch = ledger.begin("r", round_id=11)
+        self.assertNotEqual(old_message.tag.version, old_ledger_epoch.version)
+        ledger.stage_outcome(old_ledger_epoch, "candidate", 3)
+
+        current_message = protocol.retry_verification()
+        current_ledger_epoch = ledger.retry(old_ledger_epoch)
+        self.assertEqual(current_message.tag.round_id, current_ledger_epoch.round_id)
+        self.assertNotEqual(current_message.tag, old_message.tag)
+        self.assertNotEqual(current_ledger_epoch, old_ledger_epoch)
+
+        # The coordinator retains this explicit association; it need not infer
+        # ledger identity from a coincidentally equal numeric version.
+        epoch_for_message = {current_message.tag: current_ledger_epoch}
+        with self.assertRaises(StaleEpochError):
+            ledger.stage_outcome(old_ledger_epoch, "late", 1)
+        self.assertTrue(
+            protocol.handle_verify_reply(VerifyReply(old_message.tag, hit=True)).ignored
+        )
+
+        mapped_epoch = epoch_for_message[current_message.tag]
+        ledger.stage_outcome(mapped_epoch, "candidate", 2)
+        ledger.commit(mapped_epoch, "candidate", 2)
+        self.assertTrue(
+            protocol.handle_verify_reply(
+                VerifyReply(current_message.tag, hit=True, accepted_blocks=2)
+            ).applied
+        )
+        self.assertEqual(protocol.state, ProtocolState.READY_HIT)
+        ledger.audit()
 
     def test_recovery_fence_invalidates_both_old_reply_types(self) -> None:
         protocol = FissionProtocol("r")

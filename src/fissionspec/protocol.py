@@ -282,7 +282,15 @@ class FissionProtocol:
     start_round = start_verification
 
     def retry_verification(self) -> VerifyRequest:
-        """Invalidate an in-flight attempt and retry its round at a new version."""
+        """Invalidate an in-flight attempt and retry its round at a new version.
+
+        This state machine does not own KV pages.  A coordinator using
+        :class:`fissionspec.ledger.SpeculativeLedger` must also call its
+        ``retry(old_epoch)`` method and retain the explicit association between
+        the returned :class:`VerifyRequest` tag and replacement ledger epoch.
+        Their numeric versions are independent incarnation counters and must
+        not be joined by equality.
+        """
 
         with self._lock:
             if self._state is not ProtocolState.VERIFYING:

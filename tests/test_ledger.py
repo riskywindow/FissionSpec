@@ -5,6 +5,8 @@ from __future__ import annotations
 import random
 import unittest
 from dataclasses import replace
+from multiprocessing import get_all_start_methods, get_context
+from multiprocessing.connection import Connection
 
 from fissionspec.ledger import (
     AllocatorSnapshot,
@@ -12,6 +14,8 @@ from fissionspec.ledger import (
     DuplicateOutcomeError,
     DuplicateRequestError,
     FixedPageAllocator,
+    ForeignPageHandleError,
+    ForkedAllocatorError,
     InvalidCommitError,
     InvalidConfigurationError,
     InvalidPageHandleError,
@@ -21,12 +25,39 @@ from fissionspec.ledger import (
     OutOfPagesError,
     PageHandle,
     PageSpan,
+    PoolIdentity,
     SnapshotError,
     SpeculativeLedger,
     StaleEpochError,
     StalePageHandleError,
     TransactionConflictError,
 )
+
+
+def _fork_allocator_probe(
+    inherited: FixedPageAllocator,
+    snapshot: AllocatorSnapshot,
+    sender: Connection,
+) -> None:
+    """Exercise inherited and restored pools in a forked child process."""
+
+    try:
+        inherited.allocate()
+    except Exception as exc:
+        inherited_error = type(exc).__name__
+    else:
+        inherited_error = "none"
+    restored = FixedPageAllocator.from_snapshot(snapshot)
+    restored_handle = next(iter(restored.live_handles()))
+    sender.send(
+        (
+            inherited_error,
+            restored.pool_id,
+            restored_handle.pool_id,
+            restored.owner_of(restored_handle),
+        )
+    )
+    sender.close()
 
 
 class FixedPageAllocatorTests(unittest.TestCase):
@@ -67,7 +98,33 @@ class FixedPageAllocatorTests(unittest.TestCase):
         with self.assertRaises(StalePageHandleError):
             allocator.clone(source)
         with self.assertRaises(InvalidPageHandleError):
-            allocator.release(PageHandle(2, 1))
+            allocator.release(PageHandle(2, 1, allocator.pool_id))
+
+    def test_handles_from_numerically_identical_foreign_pool_are_rejected(self) -> None:
+        first = FixedPageAllocator(2, 4)
+        second = FixedPageAllocator(2, 4)
+        first_handle = first.allocate("first")
+        second_handle = second.allocate("second")
+        self.assertEqual(
+            (first_handle.page_id, first_handle.generation),
+            (second_handle.page_id, second_handle.generation),
+        )
+        self.assertNotEqual(first_handle.pool_id, second_handle.pool_id)
+
+        foreign_operations = [
+            lambda: second.release(first_handle),
+            lambda: second.clone(first_handle),
+            lambda: second.reassign(first_handle, "forged"),
+            lambda: second.owner_of(first_handle),
+            lambda: second.is_live(first_handle),
+        ]
+        for operation in foreign_operations:
+            with self.subTest(operation=operation), self.assertRaises(ForeignPageHandleError):
+                operation()
+        self.assertTrue(first.is_live(first_handle))
+        self.assertTrue(second.is_live(second_handle))
+        first.audit()
+        second.audit()
 
     def test_snapshot_round_trip_preserves_generation_and_free_partition(self) -> None:
         allocator = FixedPageAllocator(4, 8)
@@ -78,12 +135,56 @@ class FixedPageAllocatorTests(unittest.TestCase):
         snapshot = allocator.snapshot()
 
         restored = FixedPageAllocator.from_snapshot(snapshot)
-        self.assertEqual(restored.snapshot(), snapshot)
-        self.assertEqual(restored.owner_of(second), "moved")
+        restored_snapshot = restored.snapshot()
+        self.assertEqual(allocator.snapshot(), snapshot)
+        self.assertNotEqual(restored.pool_id, snapshot.pool_id)
+        self.assertEqual(restored_snapshot.generations, snapshot.generations)
+        self.assertEqual(restored_snapshot.free_pages, snapshot.free_pages)
+        self.assertEqual(
+            tuple(
+                (handle.page_id, handle.generation, owner)
+                for handle, owner in restored_snapshot.live
+            ),
+            tuple((handle.page_id, handle.generation, owner) for handle, owner in snapshot.live),
+        )
+        restored_second = next(
+            handle for handle in restored.live_handles() if handle.page_id == second.page_id
+        )
+        self.assertEqual(restored.owner_of(restored_second), "moved")
+        with self.assertRaises(ForeignPageHandleError):
+            restored.owner_of(second)
         reused = restored.allocate()
         self.assertEqual(reused.page_id, first.page_id)
         self.assertEqual(reused.generation, first.generation + 1)
         restored.audit()
+
+        concurrent_restore = FixedPageAllocator.from_snapshot(snapshot)
+        self.assertNotEqual(concurrent_restore.pool_id, restored.pool_id)
+        with self.assertRaises(ForeignPageHandleError):
+            concurrent_restore.is_live(restored_second)
+        with self.assertRaises(ForeignPageHandleError):
+            allocator.is_live(restored_second)
+
+    def test_in_place_restore_invalidates_both_source_and_destination_handles(self) -> None:
+        source = FixedPageAllocator(2, 4)
+        source_handle = source.allocate("source")
+        snapshot = source.snapshot()
+
+        destination = FixedPageAllocator(3, 8)
+        destination_handle = destination.allocate("destination")
+        old_destination_pool = destination.pool_id
+        destination.restore(snapshot)
+
+        self.assertNotEqual(destination.pool_id, snapshot.pool_id)
+        self.assertNotEqual(destination.pool_id, old_destination_pool)
+        for foreign in (source_handle, destination_handle):
+            with self.subTest(foreign=foreign), self.assertRaises(ForeignPageHandleError):
+                destination.is_live(foreign)
+        restored_handle = next(iter(destination.live_handles()))
+        self.assertEqual(destination.owner_of(restored_handle), "source")
+        self.assertEqual(destination.page_count, source.page_count)
+        self.assertEqual(destination.page_size, source.page_size)
+        destination.audit()
 
     def test_corrupt_allocator_snapshots_fail_closed(self) -> None:
         allocator = FixedPageAllocator(3, 4)
@@ -101,9 +202,39 @@ class FixedPageAllocatorTests(unittest.TestCase):
             replace(snapshot, live=(snapshot.live[0], snapshot.live[0])),
             replace(
                 snapshot,
-                live=((PageHandle(live.page_id, live.generation + 1), None),),
+                live=(
+                    (
+                        PageHandle(
+                            live.page_id,
+                            live.generation + 1,
+                            allocator.pool_id,
+                        ),
+                        None,
+                    ),
+                ),
             ),
-            AllocatorSnapshot(3, 4, (1, 0, 0), (), (1, 2)),
+            replace(snapshot, pool_id=FixedPageAllocator(1, 1).pool_id),
+            replace(
+                snapshot,
+                live=(
+                    (
+                        PageHandle(
+                            live.page_id,
+                            live.generation,
+                            FixedPageAllocator(1, 1).pool_id,
+                        ),
+                        None,
+                    ),
+                ),
+            ),
+            AllocatorSnapshot(
+                page_count=3,
+                page_size=4,
+                pool_id=snapshot.pool_id,
+                generations=(1, 0, 0),
+                live=(),
+                free_pages=(1, 2),
+            ),
         ]
         for corrupted in corruptions:
             with self.subTest(corrupted=corrupted), self.assertRaises(SnapshotError):
@@ -116,9 +247,42 @@ class FixedPageAllocatorTests(unittest.TestCase):
                 self.assertRaises(InvalidConfigurationError),
             ):
                 FixedPageAllocator(page_count, page_size)
-        for args in ((-1, 1), (0, 0), (True, 1)):
+        pool_id = FixedPageAllocator(1, 1).pool_id
+        for args in ((-1, 1, pool_id), (0, 0, pool_id), (True, 1, pool_id)):
             with self.subTest(args=args), self.assertRaises(InvalidPageHandleError):
                 PageHandle(*args)
+        with self.assertRaises(InvalidPageHandleError):
+            PageHandle(0, 1, object())  # type: ignore[arg-type]
+        with self.assertRaises(InvalidConfigurationError):
+            PoolIdentity("not-a-session", 1, 1)
+
+    def test_pool_identities_are_unique_within_the_process_session(self) -> None:
+        pools = {FixedPageAllocator(1, 1).pool_id for _ in range(512)}
+        self.assertEqual(len(pools), 512)
+
+    def test_forked_allocator_must_be_restored_into_fresh_child_pool(self) -> None:
+        if "fork" not in get_all_start_methods():
+            self.skipTest("platform has no fork start method")
+        allocator = FixedPageAllocator(2, 4)
+        allocator.allocate("persisted")
+        snapshot = allocator.snapshot()
+        context = get_context("fork")
+        receiver, sender = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_fork_allocator_probe,
+            args=(allocator, snapshot, sender),
+        )
+        process.start()
+        sender.close()
+        self.assertTrue(receiver.poll(5.0), "forked allocator probe timed out")
+        inherited_error, child_pool, handle_pool, owner = receiver.recv()
+        receiver.close()
+        process.join(timeout=5.0)
+        self.assertEqual(process.exitcode, 0)
+        self.assertEqual(inherited_error, ForkedAllocatorError.__name__)
+        self.assertNotEqual(child_pool, allocator.pool_id)
+        self.assertEqual(handle_pool, child_pool)
+        self.assertEqual(owner, "persisted")
 
 
 class SpeculativeLedgerTests(unittest.TestCase):
@@ -228,6 +392,34 @@ class SpeculativeLedgerTests(unittest.TestCase):
                 1,
             )
         ledger.abort(next_epoch)
+        ledger.audit()
+
+    def test_retry_fences_same_round_and_releases_old_private_pages(self) -> None:
+        ledger = self.make_ledger()
+        ledger.register_request("r", 3)
+        old_epoch = ledger.begin("r", 7)
+        old_branch = ledger.stage_outcome(old_epoch, "old", 6)
+
+        replacement = ledger.retry(old_epoch)
+        self.assertEqual(replacement.request_id, old_epoch.request_id)
+        self.assertEqual(replacement.round_id, old_epoch.round_id)
+        self.assertGreater(replacement.version, old_epoch.version)
+        self.assertEqual(ledger.request("r").active_epoch, replacement)
+        self.assertEqual(ledger.request("r").outcomes, ())
+        self.assertTrue(all(not ledger.allocator.is_live(page.handle) for page in old_branch.pages))
+        stale_operations = [
+            lambda: ledger.stage_outcome(old_epoch, "late", 1),
+            lambda: ledger.commit(old_epoch, "old", 1),
+            lambda: ledger.abort(old_epoch),
+            lambda: ledger.retry(old_epoch),
+        ]
+        for operation in stale_operations:
+            with self.subTest(operation=operation), self.assertRaises(StaleEpochError):
+                operation()
+
+        ledger.stage_outcome(replacement, "current", 2)
+        result = ledger.commit(replacement, "current", 2)
+        self.assertEqual(result.committed_blocks, 5)
         ledger.audit()
 
     def test_invalid_selection_and_prefix_leave_transaction_untouched(self) -> None:
@@ -342,8 +534,38 @@ class SpeculativeLedgerTests(unittest.TestCase):
         ledger.abort(aborted_epoch)
 
         snapshot = ledger.snapshot()
+        self.assertEqual(ledger.snapshot(), snapshot)
         restored = SpeculativeLedger.from_snapshot(snapshot)
-        self.assertEqual(restored.snapshot(), snapshot)
+        restored_snapshot = restored.snapshot()
+        self.assertEqual(restored.snapshot(), restored_snapshot)
+        self.assertNotEqual(restored.allocator.pool_id, ledger.allocator.pool_id)
+        self.assertEqual(restored_snapshot.aborted_epochs, snapshot.aborted_epochs)
+        self.assertEqual(restored_snapshot.version_floors, snapshot.version_floors)
+        self.assertEqual(
+            restored_snapshot.allocator.generations,
+            snapshot.allocator.generations,
+        )
+        self.assertEqual(
+            restored_snapshot.allocator.free_pages,
+            snapshot.allocator.free_pages,
+        )
+        original_live_handle = snapshot.allocator.live[0][0]
+        with self.assertRaises(ForeignPageHandleError):
+            restored.allocator.is_live(original_live_handle)
+        self.assertTrue(
+            all(
+                page.handle.pool_id == restored.allocator.pool_id
+                for request_view in restored.requests()
+                for page in (
+                    *request_view.committed_pages,
+                    *(
+                        branch_page
+                        for branch_view in request_view.outcomes
+                        for branch_page in branch_view.pages
+                    ),
+                )
+            )
+        )
         self.assertFalse(restored.abort(aborted_epoch))
         result = restored.commit(active_epoch, "a", 5)
         self.assertEqual(result.committed_blocks, 12)
@@ -374,6 +596,24 @@ class SpeculativeLedgerTests(unittest.TestCase):
         corrupted = replace(snapshot, requests=(corrupt_request,))
         with self.assertRaises(SnapshotError):
             SpeculativeLedger.from_snapshot(corrupted)
+
+        foreign_allocator = FixedPageAllocator(
+            snapshot.allocator.page_count, snapshot.allocator.page_size
+        )
+        foreign_span = PageSpan(
+            PageHandle(
+                branch.pages[0].handle.page_id,
+                branch.pages[0].handle.generation,
+                foreign_allocator.pool_id,
+            ),
+            branch.pages[0].start,
+            branch.pages[0].used,
+        )
+        foreign_branch = replace(branch, pages=(foreign_span,))
+        foreign_active = replace(request.active, branches=(foreign_branch,))
+        foreign_request = replace(request, active=foreign_active)
+        with self.assertRaises(SnapshotError):
+            SpeculativeLedger.from_snapshot(replace(snapshot, requests=(foreign_request,)))
 
         wrong_owner_live = tuple(
             (handle, "wrong-owner") for handle, _owner in snapshot.allocator.live

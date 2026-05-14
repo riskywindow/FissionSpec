@@ -7,6 +7,10 @@ tensor bytes.  A :class:`PageHandle` is the capability a backend would attach
 to one physical page, while :class:`PageSpan` records the logical block range
 that is valid in that page.
 
+Handles carry both a generation and a cryptographic process/session pool
+namespace.  Generation blocks ABA within one pool; namespace blocks the
+otherwise-identical first handle from another allocator.
+
 The ledger assumes exclusive ownership of its allocator.  Its :meth:`audit`
 method therefore proves a strong partition invariant: every physical page is
 either free or is referenced exactly once by a committed trunk or private
@@ -17,6 +21,9 @@ position/count drift at the point they occur rather than several rounds later.
 from __future__ import annotations
 
 import heapq
+import itertools
+import os
+import secrets
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,8 +32,31 @@ from typing import Final, TypeAlias
 RequestId: TypeAlias = str | int
 OutcomeId: TypeAlias = str | int
 
-_ALLOCATOR_SNAPSHOT_VERSION: Final[int] = 1
-_LEDGER_SNAPSHOT_VERSION: Final[int] = 1
+_ALLOCATOR_SNAPSHOT_VERSION: Final[int] = 2
+_LEDGER_SNAPSHOT_VERSION: Final[int] = 2
+
+# A module session is computationally unique across independently started
+# processes.  The ordinal then gives collision-free identities within that
+# session.  ``_new_pool_identity`` notices fork(), creates a fresh child
+# session, and resets the child-local sequence.
+_POOL_ID_LOCK = threading.Lock()
+_POOL_ID_PROCESS = os.getpid()
+_POOL_ID_SESSION = secrets.token_hex(32)
+_POOL_ID_SEQUENCE = itertools.count(1)
+
+
+def _reset_pool_identity_after_fork() -> None:
+    """Create independent child identity state, including an unlocked lock."""
+
+    global _POOL_ID_LOCK, _POOL_ID_PROCESS, _POOL_ID_SEQUENCE, _POOL_ID_SESSION
+    _POOL_ID_LOCK = threading.Lock()
+    _POOL_ID_PROCESS = os.getpid()
+    _POOL_ID_SESSION = secrets.token_hex(32)
+    _POOL_ID_SEQUENCE = itertools.count(1)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_pool_identity_after_fork)
 
 
 class LedgerError(RuntimeError):
@@ -43,6 +73,14 @@ class OutOfPagesError(LedgerError):
 
 class InvalidPageHandleError(LedgerError, ValueError):
     """Raised when a handle names no physical page in an allocator."""
+
+
+class ForeignPageHandleError(InvalidPageHandleError):
+    """Raised when a page capability belongs to a different allocator pool."""
+
+
+class ForkedAllocatorError(LedgerError):
+    """Raised when an allocator inherited through ``fork()`` is used directly."""
 
 
 class StalePageHandleError(LedgerError):
@@ -114,16 +152,76 @@ def _owner_component(value: RequestId) -> str:
 
 
 @dataclass(frozen=True, order=True, slots=True)
+class PoolIdentity:
+    """Computationally unique namespace for one allocator incarnation.
+
+    ``session_id`` is a 256-bit cryptographic nonce created once per process
+    session, including a fresh session after ``fork()``.  ``ordinal`` is never
+    reused within that session.  ``process_id`` is diagnostic and also makes a
+    fork boundary explicit in persisted snapshots.
+
+    Snapshot restoration never reuses this identity: it allocates a new local
+    identity and rebases every live handle.  Consequently two concurrent
+    restores of the same snapshot cannot accept one another's capabilities.
+    """
+
+    session_id: str
+    process_id: int
+    ordinal: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.session_id, str)
+            or len(self.session_id) != 64
+            or self.session_id.lower() != self.session_id
+        ):
+            raise InvalidConfigurationError(
+                "pool session_id must be 64 lowercase hexadecimal characters"
+            )
+        try:
+            decoded = bytes.fromhex(self.session_id)
+        except ValueError as exc:
+            raise InvalidConfigurationError("pool session_id must be hexadecimal") from exc
+        if len(decoded) != 32:
+            raise InvalidConfigurationError("pool session_id must encode 256 bits")
+        try:
+            _plain_int(self.process_id, field="pool process_id", minimum=1)
+            _plain_int(self.ordinal, field="pool ordinal", minimum=1)
+        except ValueError as exc:
+            raise InvalidConfigurationError(str(exc)) from exc
+
+
+def _new_pool_identity() -> PoolIdentity:
+    """Return a fresh pool namespace, refreshing process state after ``fork``."""
+
+    global _POOL_ID_PROCESS, _POOL_ID_SEQUENCE, _POOL_ID_SESSION
+    process_id = os.getpid()
+    with _POOL_ID_LOCK:
+        if process_id != _POOL_ID_PROCESS:
+            _POOL_ID_PROCESS = process_id
+            _POOL_ID_SESSION = secrets.token_hex(32)
+            _POOL_ID_SEQUENCE = itertools.count(1)
+        return PoolIdentity(
+            session_id=_POOL_ID_SESSION,
+            process_id=process_id,
+            ordinal=next(_POOL_ID_SEQUENCE),
+        )
+
+
+@dataclass(frozen=True, order=True, slots=True)
 class PageHandle:
     """An ABA-safe lease on one physical page.
 
-    ``page_id`` may be reused, but every allocation increments ``generation``.
-    A delayed release of an older generation can therefore never free a newer
+    ``page_id`` may be reused, but every allocation increments the unbounded
+    Python integer ``generation``.  ``pool_id`` distinguishes independently
+    created allocators.  A delayed release of an older generation—or a handle
+    from a numerically identical foreign pool—can therefore never free a newer
     tenant's page.
     """
 
     page_id: int
     generation: int
+    pool_id: PoolIdentity
 
     def __post_init__(self) -> None:
         try:
@@ -131,6 +229,8 @@ class PageHandle:
             _plain_int(self.generation, field="generation", minimum=1)
         except ValueError as exc:
             raise InvalidPageHandleError(str(exc)) from exc
+        if not isinstance(self.pool_id, PoolIdentity):
+            raise InvalidPageHandleError("pool_id must be a PoolIdentity")
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,10 +256,17 @@ class PageSpan:
 
 @dataclass(frozen=True, slots=True)
 class AllocatorSnapshot:
-    """Immutable, complete state required to restore a page allocator."""
+    """Immutable, complete source state used to restore a page allocator.
+
+    Restoration validates ``pool_id`` and every saved live handle, then assigns
+    the destination a fresh pool identity and rebases the handles.  Repeated
+    snapshots of one live allocator compare equal; a restored snapshot differs
+    in namespace by design.
+    """
 
     page_count: int
     page_size: int
+    pool_id: PoolIdentity
     generations: tuple[int, ...]
     live: tuple[tuple[PageHandle, str | None], ...]
     free_pages: tuple[int, ...]
@@ -167,7 +274,12 @@ class AllocatorSnapshot:
 
 
 class FixedPageAllocator:
-    """A finite, thread-safe page allocator with generation-checked leases."""
+    """A finite, thread-safe allocator with namespaced generation leases.
+
+    An allocator inherited through ``fork()`` is deliberately unusable.  Take
+    a snapshot and restore it in the child to obtain a safely re-namespaced
+    pool instead of sharing capabilities across diverged address spaces.
+    """
 
     def __init__(self, page_count: int, page_size: int) -> None:
         try:
@@ -175,6 +287,8 @@ class FixedPageAllocator:
             self._page_size = _plain_int(page_size, field="page_size", minimum=1)
         except ValueError as exc:
             raise InvalidConfigurationError(str(exc)) from exc
+        self._pool_id = _new_pool_identity()
+        self._creator_pid = os.getpid()
         self._generations: list[int] = [0] * self._page_count
         self._live: dict[int, tuple[PageHandle, str | None]] = {}
         self._free: list[int] = list(range(self._page_count))
@@ -198,13 +312,21 @@ class FixedPageAllocator:
         return self._page_size
 
     @property
+    def pool_id(self) -> PoolIdentity:
+        """Namespace carried by every handle issued by this allocator."""
+
+        return self._pool_id
+
+    @property
     def free_count(self) -> int:
         with self._lock:
+            self._assert_process_unlocked()
             return len(self._free)
 
     @property
     def allocated_count(self) -> int:
         with self._lock:
+            self._assert_process_unlocked()
             return len(self._live)
 
     def allocate(self, owner: str | None = None) -> PageHandle:
@@ -213,11 +335,12 @@ class FixedPageAllocator:
         if owner is not None and not isinstance(owner, str):
             raise ValueError("owner must be a str or None")
         with self._lock:
+            self._assert_process_unlocked()
             if not self._free:
                 raise OutOfPagesError(f"allocator exhausted ({self._page_count} pages are live)")
             page_id = heapq.heappop(self._free)
             self._generations[page_id] += 1
-            handle = PageHandle(page_id, self._generations[page_id])
+            handle = PageHandle(page_id, self._generations[page_id], self._pool_id)
             self._live[page_id] = (handle, owner)
             return handle
 
@@ -229,6 +352,7 @@ class FixedPageAllocator:
         """
 
         with self._lock:
+            self._assert_process_unlocked()
             self._require_live_unlocked(source)
             return self.allocate(owner)
 
@@ -236,6 +360,7 @@ class FixedPageAllocator:
         """Release a lease, rejecting stale generations and double releases."""
 
         with self._lock:
+            self._assert_process_unlocked()
             self._validate_page_id_unlocked(handle)
             current_generation = self._generations[handle.page_id]
             current = self._live.get(handle.page_id)
@@ -260,6 +385,7 @@ class FixedPageAllocator:
         if owner is not None and not isinstance(owner, str):
             raise ValueError("owner must be a str or None")
         with self._lock:
+            self._assert_process_unlocked()
             self._require_live_unlocked(handle)
             self._live[handle.page_id] = (handle, owner)
 
@@ -267,8 +393,10 @@ class FixedPageAllocator:
         """Return whether ``handle`` is the exact current live generation."""
 
         with self._lock:
+            self._assert_process_unlocked()
             if not isinstance(handle, PageHandle):
                 return False
+            self._validate_pool_unlocked(handle)
             current = self._live.get(handle.page_id)
             return current is not None and current[0] == handle
 
@@ -276,6 +404,7 @@ class FixedPageAllocator:
         """Return diagnostic ownership for a live handle."""
 
         with self._lock:
+            self._assert_process_unlocked()
             _, owner = self._require_live_unlocked(handle)
             return owner
 
@@ -283,15 +412,18 @@ class FixedPageAllocator:
         """Return an immutable point-in-time view of all current leases."""
 
         with self._lock:
+            self._assert_process_unlocked()
             return frozenset(entry[0] for entry in self._live.values())
 
     def snapshot(self) -> AllocatorSnapshot:
         """Capture an immutable allocator checkpoint."""
 
         with self._lock:
+            self._assert_process_unlocked()
             return AllocatorSnapshot(
                 page_count=self._page_count,
                 page_size=self._page_size,
+                pool_id=self._pool_id,
                 generations=tuple(self._generations),
                 live=tuple(self._live[index] for index in sorted(self._live)),
                 free_pages=tuple(sorted(self._free)),
@@ -299,7 +431,7 @@ class FixedPageAllocator:
 
     @classmethod
     def from_snapshot(cls, snapshot: AllocatorSnapshot) -> FixedPageAllocator:
-        """Construct an allocator from a validated checkpoint."""
+        """Construct a freshly namespaced allocator from a validated checkpoint."""
 
         if not isinstance(snapshot, AllocatorSnapshot):
             raise SnapshotError("expected an AllocatorSnapshot")
@@ -310,9 +442,19 @@ class FixedPageAllocator:
         ):
             raise SnapshotError(f"unsupported allocator snapshot version {snapshot.schema_version}")
         try:
+            if not isinstance(snapshot.pool_id, PoolIdentity):
+                raise InvariantViolation("snapshot pool_id is invalid")
             allocator = cls(snapshot.page_count, snapshot.page_size)
             allocator._generations = list(snapshot.generations)
-            allocator._live = {handle.page_id: (handle, owner) for handle, owner in snapshot.live}
+            rebased_live: dict[int, tuple[PageHandle, str | None]] = {}
+            for handle, owner in snapshot.live:
+                if not isinstance(handle, PageHandle):
+                    raise InvariantViolation("live snapshot contains a non-handle")
+                if handle.pool_id != snapshot.pool_id:
+                    raise InvariantViolation("live handle namespace does not match snapshot pool")
+                rebased = PageHandle(handle.page_id, handle.generation, allocator._pool_id)
+                rebased_live[rebased.page_id] = (rebased, owner)
+            allocator._live = rebased_live
             if len(allocator._live) != len(snapshot.live):
                 raise InvariantViolation("live snapshot contains a duplicate page")
             allocator._free = list(snapshot.free_pages)
@@ -329,6 +471,8 @@ class FixedPageAllocator:
         with self._lock:
             self._page_count = restored._page_count
             self._page_size = restored._page_size
+            self._pool_id = restored._pool_id
+            self._creator_pid = restored._creator_pid
             self._generations = restored._generations
             self._live = restored._live
             self._free = restored._free
@@ -337,6 +481,7 @@ class FixedPageAllocator:
         """Prove the live/free partition and generation invariants."""
 
         with self._lock:
+            self._assert_process_unlocked()
             if self._page_count < 1 or self._page_size < 1:
                 raise InvariantViolation("allocator dimensions must be positive")
             if len(self._generations) != self._page_count:
@@ -367,6 +512,8 @@ class FixedPageAllocator:
             for page_id, (handle, owner) in self._live.items():
                 if not isinstance(handle, PageHandle) or handle.page_id != page_id:
                     raise InvariantViolation("live table key/handle mismatch")
+                if handle.pool_id != self._pool_id:
+                    raise InvariantViolation("live handle belongs to another pool")
                 if handle.generation != self._generations[page_id]:
                     raise InvariantViolation("live handle has a stale generation")
                 if owner is not None and not isinstance(owner, str):
@@ -375,6 +522,7 @@ class FixedPageAllocator:
     def _validate_page_id_unlocked(self, handle: PageHandle) -> None:
         if not isinstance(handle, PageHandle):
             raise InvalidPageHandleError("expected a PageHandle")
+        self._validate_pool_unlocked(handle)
         if handle.page_id >= self._page_count:
             raise InvalidPageHandleError(
                 f"page {handle.page_id} is outside capacity {self._page_count}"
@@ -386,6 +534,21 @@ class FixedPageAllocator:
         if current is None or current[0] != handle:
             raise StalePageHandleError(f"page lease {handle!r} is not live")
         return current
+
+    def _validate_pool_unlocked(self, handle: PageHandle) -> None:
+        if handle.pool_id != self._pool_id:
+            raise ForeignPageHandleError(
+                f"page lease belongs to pool {handle.pool_id!r}, not {self._pool_id!r}"
+            )
+
+    def _assert_process_unlocked(self) -> None:
+        current_pid = os.getpid()
+        if current_pid != self._creator_pid:
+            raise ForkedAllocatorError(
+                f"allocator pool was created in process {self._creator_pid}, "
+                f"but is being used in process {current_pid}; restore a snapshot "
+                "in the child to obtain a fresh pool namespace"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,7 +626,11 @@ class RequestSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class LedgerSnapshot:
-    """Immutable crash-recovery image of allocator and transaction state."""
+    """Immutable crash-recovery image of allocator and transaction state.
+
+    Restoring re-namespaces the allocator and all trunk/branch handles as one
+    atomic logical image; the source snapshot's handles remain foreign.
+    """
 
     allocator: AllocatorSnapshot
     requests: tuple[RequestSnapshot, ...]
@@ -723,6 +890,37 @@ class SpeculativeLedger:
 
     abort_transaction = abort
 
+    def retry(self, epoch: LedgerEpoch) -> LedgerEpoch:
+        """Fence and restart the same logical round at a fresh ledger version.
+
+        Every provisional page from ``epoch`` is released before the replacement
+        epoch becomes visible.  Delayed stage/commit/abort operations carrying
+        the old epoch are therefore stale.
+
+        The returned version is a *ledger* incarnation counter.  A coordinator
+        retrying :class:`~fissionspec.protocol.MessageTag` must retain the
+        explicit ``MessageTag -> LedgerEpoch`` association; numeric protocol and
+        ledger versions often advance together but are not specified to be
+        globally equal (for example, request-ID tombstones can advance only the
+        ledger counter).
+        """
+
+        if not isinstance(epoch, LedgerEpoch):
+            raise StaleEpochError("expected a LedgerEpoch")
+        with self._lock:
+            request, transaction = self._require_active_unlocked(epoch)
+            for branch in transaction.branches.values():
+                for span in branch.pages:
+                    self._allocator.release(span.handle)
+            request.version += 1
+            self._version_floors[request.request_id] = request.version
+            replacement = LedgerEpoch(request.request_id, request.last_round, request.version)
+            request.active = _Transaction(replacement, {})
+            self._audit_unlocked()
+            return replacement
+
+    retry_transaction = retry
+
     def drop_request(self, request_id: RequestId) -> bool:
         """Release a request's transaction and trunk; missing requests are no-ops."""
 
@@ -813,7 +1011,7 @@ class SpeculativeLedger:
 
     @classmethod
     def from_snapshot(cls, snapshot: LedgerSnapshot) -> SpeculativeLedger:
-        """Restore and fully audit a crash-recovery checkpoint."""
+        """Restore, re-namespace, and fully audit a crash-recovery checkpoint."""
 
         if not isinstance(snapshot, LedgerSnapshot):
             raise SnapshotError("expected a LedgerSnapshot")
@@ -825,6 +1023,25 @@ class SpeculativeLedger:
             raise SnapshotError(f"unsupported ledger snapshot version {snapshot.schema_version}")
         try:
             allocator = FixedPageAllocator.from_snapshot(snapshot.allocator)
+            source_pool = snapshot.allocator.pool_id
+
+            def rebase_span(span: PageSpan) -> PageSpan:
+                if not isinstance(span, PageSpan):
+                    raise InvariantViolation("snapshot contains a non-PageSpan")
+                if span.handle.pool_id != source_pool:
+                    raise InvariantViolation(
+                        "ledger page namespace does not match allocator snapshot"
+                    )
+                return PageSpan(
+                    PageHandle(
+                        span.handle.page_id,
+                        span.handle.generation,
+                        allocator.pool_id,
+                    ),
+                    span.start,
+                    span.used,
+                )
+
             # Bypass the public constructor's empty-allocator precondition: the
             # snapshot's pages are about to be reattached and audited exactly.
             ledger = cls.__new__(cls)
@@ -851,14 +1068,14 @@ class SpeculativeLedger:
                         branches[branch.outcome_id] = _Branch(
                             branch.outcome_id,
                             branch.appended_blocks,
-                            list(branch.pages),
+                            [rebase_span(span) for span in branch.pages],
                             branch.cow_tail,
                         )
                     active = _Transaction(saved.active.epoch, branches)
                 ledger._requests[saved.request_id] = _Request(
                     saved.request_id,
                     saved.committed_blocks,
-                    list(saved.committed_pages),
+                    [rebase_span(span) for span in saved.committed_pages],
                     saved.version,
                     saved.last_round,
                     active,
@@ -877,7 +1094,7 @@ class SpeculativeLedger:
             raise SnapshotError(f"invalid ledger snapshot: {exc}") from exc
 
     def restore(self, snapshot: LedgerSnapshot) -> None:
-        """Atomically replace this ledger with a validated checkpoint."""
+        """Replace this ledger with a validated, freshly namespaced checkpoint."""
 
         restored = type(self).from_snapshot(snapshot)
         with self._lock:
@@ -915,10 +1132,15 @@ class SpeculativeLedger:
                     f"({prior!r} and {span.handle!r})"
                 )
             tracked[span.handle.page_id] = span.handle
-            if not self._allocator.is_live(span.handle):
-                raise InvariantViolation(f"{context} references stale {span.handle!r}")
-            if self._allocator.owner_of(span.handle) != expected_owner:
-                raise InvariantViolation(f"{context} has incorrect allocator ownership")
+            try:
+                if not self._allocator.is_live(span.handle):
+                    raise InvariantViolation(f"{context} references stale {span.handle!r}")
+                if self._allocator.owner_of(span.handle) != expected_owner:
+                    raise InvariantViolation(f"{context} has incorrect allocator ownership")
+            except InvalidPageHandleError as exc:
+                raise InvariantViolation(
+                    f"{context} references a foreign or invalid page handle"
+                ) from exc
 
         for request_id, request in self._requests.items():
             if not isinstance(request, _Request):
@@ -1161,6 +1383,8 @@ __all__ = [
     "DuplicateOutcomeError",
     "DuplicateRequestError",
     "FixedPageAllocator",
+    "ForeignPageHandleError",
+    "ForkedAllocatorError",
     "InvalidCommitError",
     "InvalidConfigurationError",
     "InvalidPageHandleError",
@@ -1173,6 +1397,7 @@ __all__ = [
     "OutcomeNotFoundError",
     "PageHandle",
     "PageSpan",
+    "PoolIdentity",
     "RequestId",
     "RequestNotFoundError",
     "RequestSnapshot",
