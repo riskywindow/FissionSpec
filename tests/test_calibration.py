@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from fissionspec.calibration import (
@@ -12,6 +14,7 @@ from fissionspec.calibration import (
     load_samples_csv,
     write_profile_json,
 )
+from tools.calibrate_profile import main as calibrate_main
 
 
 class CalibrationTests(unittest.TestCase):
@@ -138,6 +141,13 @@ class CalibrationTests(unittest.TestCase):
             with self.assertRaisesRegex(CalibrationError, "CSV line 2"):
                 load_samples_csv(path)
 
+            path.write_text(
+                "component,batch_rows,latency_ms,verifier_slots\ntarget,1,2,1,unexpected\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CalibrationError, "too many fields"):
+                load_samples_csv(path)
+
     def test_requires_every_component(self) -> None:
         with self.assertRaises(CalibrationError):
             fit_profile([TimingSample("target", 1, 1.0, 1)])
@@ -190,6 +200,49 @@ class CalibrationTests(unittest.TestCase):
         self.assertIsInstance(provenance, dict)
         self.assertEqual(provenance["kind"], "unverified-measurement")
         self.assertFalse(provenance["publication_ready"])
+
+    def test_calibration_cli_protects_outputs_and_failed_slope_fit(self) -> None:
+        valid_csv = (
+            "component,batch_rows,latency_ms,verifier_slots\n"
+            "target,1,2.0,1\n"
+            "target,1,2.1,2\n"
+            "draft,1,0.5,0\n"
+            "recovery,1,0.8,0\n"
+        )
+        clipped_csv = valid_csv.replace("target,1,2.1,2", "target,1,1.9,2")
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            input_path = base / "raw.csv"
+            output_path = base / "profile.json"
+            input_path.write_text(valid_csv, encoding="utf-8")
+            output_path.write_text("sentinel\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(SystemExit, "already exists"):
+                calibrate_main([str(input_path), str(output_path), "--name", "test"])
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "sentinel\n")
+
+            input_path.write_text(clipped_csv, encoding="utf-8")
+            output_path.unlink()
+            with self.assertRaisesRegex(SystemExit, "non-negative"):
+                calibrate_main(
+                    [
+                        str(input_path),
+                        str(output_path),
+                        "--name",
+                        "test",
+                        "--require-slot-slope",
+                    ]
+                )
+            self.assertFalse(output_path.exists())
+
+            input_path.write_text(valid_csv, encoding="utf-8")
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(
+                    calibrate_main([str(input_path), str(output_path), "--name", "test"]),
+                    0,
+                )
+            document = json.loads(output_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["provenance"]["kind"], "unverified-measurement")
 
 
 if __name__ == "__main__":

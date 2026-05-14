@@ -303,6 +303,10 @@ def load_samples_csv(path: Path) -> tuple[TimingSample, ...]:
         samples: list[TimingSample] = []
         for line_number, row in enumerate(reader, start=2):
             try:
+                if None in row:
+                    raise CalibrationError(
+                        f"too many fields at CSV line {line_number}"
+                    )
                 raw_component = _csv_cell(row, "component", line_number=line_number)
                 if raw_component not in _COMPONENTS:
                     raise CalibrationError(f"unknown component: {raw_component!r}")
