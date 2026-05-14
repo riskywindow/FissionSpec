@@ -80,7 +80,10 @@ pub fn expected_hol_victims(miss_probabilities: &[f64]) -> Result<f64, Probabili
         let survival = 1.0 - probability;
         let excluded_miss = match zero_count {
             0 => {
-                let excluded_log = log_nonzero_survival - survival.ln();
+                // Do not form `1 - p` before taking the log: for sub-ULP
+                // probabilities that subtraction rounds to one and fails to
+                // exclude the current member from the peer-miss probability.
+                let excluded_log = log_nonzero_survival - (-probability).ln_1p();
                 (-excluded_log.exp_m1()).clamp(0.0, 1.0)
             }
             1 if survival == 0.0 => (-log_nonzero_survival.exp_m1()).clamp(0.0, 1.0),
@@ -169,6 +172,12 @@ mod tests {
         close(expected_hol_victims(&[0.1, 0.1]).unwrap(), 0.18, 1e-14);
         close(expected_hol_victims(&[1.0, 0.2]).unwrap(), 0.8, 1e-14);
         close(expected_hol_victims(&[1.0]).unwrap(), 0.0, 1e-14);
+    }
+
+    #[test]
+    fn expected_victims_excludes_sub_ulp_probabilities() {
+        close(expected_hol_victims(&[1e-18]).unwrap(), 0.0, 0.0);
+        close(expected_hol_victims(&[1e-18, 1e-18]).unwrap(), 2e-18, 1e-32);
     }
 
     #[test]

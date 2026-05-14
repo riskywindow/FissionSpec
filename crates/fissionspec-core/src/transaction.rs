@@ -32,10 +32,14 @@ pub enum TransactionState {
     Aborted,
 }
 
-/// Minimal metadata needed to fence and resolve a branch transaction.
+/// Minimal metadata used to describe and locally resolve a branch transaction.
 ///
 /// The checkpoint is the last page shared with the parent; the optional tail is
 /// the last branch-private page prepared for refusion.
+///
+/// This value is not an authoritative transaction ledger: its owner must still
+/// validate page liveness and ownership, compare against the scheduler's current
+/// epoch, and make parent visibility changes atomically.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransactionMeta {
     stamp: TransactionStamp,
@@ -99,6 +103,14 @@ impl TransactionMeta {
                 operation: "prepare",
             });
         }
+        if let (Some(checkpoint), Some(tail)) = (self.checkpoint, tail) {
+            if checkpoint.pool_id() != tail.pool_id() {
+                return Err(TransactionError::PagePoolMismatch {
+                    checkpoint_pool_id: checkpoint.pool_id(),
+                    tail_pool_id: tail.pool_id(),
+                });
+            }
+        }
         self.tail = tail;
         self.state = TransactionState::Prepared;
         Ok(())
@@ -130,10 +142,14 @@ impl TransactionMeta {
         Ok(())
     }
 
-    /// Rolls back an open or prepared branch. Page reclamation remains the
-    /// allocator owner's responsibility.
+    /// Rolls back an open or prepared branch. Replaying an abort for the same
+    /// epoch is idempotent. Page reclamation remains the allocator owner's
+    /// responsibility.
     pub fn abort(&mut self, observed_epoch: Epoch) -> Result<(), TransactionError> {
         self.check_epoch(observed_epoch)?;
+        if self.state == TransactionState::Aborted {
+            return Ok(());
+        }
         if !matches!(
             self.state,
             TransactionState::Open | TransactionState::Prepared
@@ -170,6 +186,10 @@ pub enum TransactionError {
         expected: Option<BranchId>,
         actual: Option<BranchId>,
     },
+    PagePoolMismatch {
+        checkpoint_pool_id: u64,
+        tail_pool_id: u64,
+    },
     InvalidTransition {
         from: TransactionState,
         operation: &'static str,
@@ -190,6 +210,13 @@ impl fmt::Display for TransactionError {
                     "parent fence failed: expected {expected:?}, observed {actual:?}"
                 )
             }
+            Self::PagePoolMismatch {
+                checkpoint_pool_id,
+                tail_pool_id,
+            } => write!(
+                f,
+                "transaction checkpoint belongs to page pool {checkpoint_pool_id}, but tail belongs to pool {tail_pool_id}"
+            ),
             Self::InvalidTransition { from, operation } => {
                 write!(f, "cannot {operation} a {from:?} transaction")
             }
@@ -237,17 +264,31 @@ mod tests {
     }
 
     #[test]
-    fn terminal_states_cannot_transition_again() {
+    fn abort_replay_is_idempotent_but_commit_remains_terminal() {
         let stamp = TransactionStamp::new(Epoch(1), BranchId(2));
         let mut transaction = TransactionMeta::begin(stamp, None, None);
+        transaction.abort(Epoch(1)).unwrap();
         transaction.abort(Epoch(1)).unwrap();
         assert!(matches!(
             transaction.commit_into(Epoch(1), None),
             Err(TransactionError::InvalidTransition { .. })
         ));
+    }
+
+    #[test]
+    fn prepare_rejects_a_tail_from_another_page_pool() {
+        let mut checkpoint_pool = PageAllocator::<1>::new();
+        let mut tail_pool = PageAllocator::<1>::new();
+        let checkpoint = checkpoint_pool.allocate();
+        let tail = tail_pool.allocate();
+        let stamp = TransactionStamp::new(Epoch(2), BranchId(3));
+        let mut transaction = TransactionMeta::begin(stamp, Some(BranchId(1)), checkpoint);
+
         assert!(matches!(
-            transaction.abort(Epoch(1)),
-            Err(TransactionError::InvalidTransition { .. })
+            transaction.prepare(Epoch(2), tail),
+            Err(TransactionError::PagePoolMismatch { .. })
         ));
+        assert_eq!(transaction.state(), TransactionState::Open);
+        assert_eq!(transaction.tail(), checkpoint);
     }
 }
