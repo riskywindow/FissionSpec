@@ -1,0 +1,20 @@
+[package]
+name = "fissionspec-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Allocation-free scheduling and KV-page primitives for FissionSpec"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "decision-bench"
+path = "src/bin/decision_bench.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
