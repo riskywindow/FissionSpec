@@ -142,15 +142,21 @@ For every confirmatory cell:
 - confidence sequence: alpha-spending Hoeffding with predeclared bounds
   `[-1, 1]`;
 - precision success: simultaneous half-width at most `0.03`;
-- efficacy stop: lower bound exceeds `0`;
-- futility stop: upper bound is below the minimum worthwhile improvement
-  `0.03`; and
+- efficacy stop: lower bound exceeds `0` **and** the upper bound is not below
+  the minimum worthwhile improvement `0.03`;
+- futility stop: upper bound is below `0.03` and the interval is not wholly
+  positive;
+- positive-but-below-MWI stop: the interval is wholly above `0` and wholly
+  below `0.03`; this is terminal evidence of a positive but practically
+  insufficient effect, not headline efficacy; and
 - otherwise stop at `50` and report the interval without binary success.
 
 Stopping applies to a complete multiplicity family, not whichever cell first
 looks favorable. All completed blocks remain in the analysis. Hardware or
 software failures are excluded only by an error code defined before inspecting
 metric values, and the paired counterpart is excluded with them.
+The executable ordering of these overlapping boundaries is frozen in
+`fissionspec.experiment_design.evaluate_sequential_gate`.
 
 Power planning uses the paired pilot variance but never its observed mean.
 Recommended replication is computed for standardized effects `0.3`, `0.5`, and
