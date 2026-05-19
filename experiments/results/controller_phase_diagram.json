@@ -1,0 +1,459 @@
+{
+  "artifact": "FissionSpec horizon-2 controller phase diagram",
+  "axes_and_constraints": {
+    "capacity_rows": 16,
+    "current_cohort_sizes": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "current_deadline_ms": 100.0,
+    "future_cohort_sizes": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "future_deadline_ms": 100.0,
+    "now_ms": 0.0,
+    "oldest_ready_ms": 0.0,
+    "recovery_eta_from_now_ms": [
+      0.05,
+      0.1,
+      0.25,
+      0.5,
+      1.0,
+      1.5,
+      2.01
+    ],
+    "verifier_slots_per_row": 5
+  },
+  "boundary_checks": [
+    {
+      "context": {
+        "current_deadline_ms": 100.0,
+        "current_rows": 1,
+        "future_deadline_ms": 100.0,
+        "future_rows": 1,
+        "now_ms": 0.0,
+        "oldest_ready_ms": 0.0,
+        "recovery_eta_from_now_ms": 0.05
+      },
+      "decision": "re-fuse",
+      "fissionspec_dispatch_at_ms": 0.05,
+      "id": "near-eta-overhead-dominated",
+      "immediate_fission_dispatch_at_ms": 0.0,
+      "reason": "Near recovery can re-fuse small cohorts under the modeled launch surface."
+    },
+    {
+      "context": {
+        "current_deadline_ms": 100.0,
+        "current_rows": 1,
+        "future_deadline_ms": 100.0,
+        "future_rows": 1,
+        "now_ms": 0.0,
+        "oldest_ready_ms": 0.0,
+        "recovery_eta_from_now_ms": 1.5
+      },
+      "decision": "dispatch-now",
+      "fissionspec_dispatch_at_ms": 0.0,
+      "id": "late-eta-flow-cost",
+      "immediate_fission_dispatch_at_ms": 0.0,
+      "reason": "A later recovery ETA can make immediate dispatch preferable."
+    },
+    {
+      "context": {
+        "current_deadline_ms": 100.0,
+        "current_rows": 1,
+        "future_deadline_ms": 100.0,
+        "future_rows": 8,
+        "now_ms": 0.0,
+        "oldest_ready_ms": 0.0,
+        "recovery_eta_from_now_ms": 2.01
+      },
+      "decision": "dispatch-now",
+      "fissionspec_dispatch_at_ms": 0.0,
+      "id": "eta-past-max-wait",
+      "immediate_fission_dispatch_at_ms": 0.0,
+      "reason": "A recovery beyond the oldest row's max-wait horizon cannot hold it."
+    },
+    {
+      "context": {
+        "current_deadline_ms": 100.0,
+        "current_rows": 1,
+        "future_deadline_ms": 100.0,
+        "future_rows": 8,
+        "now_ms": 2.0,
+        "oldest_ready_ms": 0.0,
+        "recovery_eta_from_now_ms": 0.05
+      },
+      "decision": "dispatch-now",
+      "fissionspec_dispatch_at_ms": 2.0,
+      "id": "oldest-row-already-at-max-wait",
+      "immediate_fission_dispatch_at_ms": 2.0,
+      "reason": "A fresh near ETA cannot reset the cumulative wait of the oldest row."
+    },
+    {
+      "context": {
+        "current_deadline_ms": 2.5,
+        "current_rows": 1,
+        "future_deadline_ms": 100.0,
+        "future_rows": 8,
+        "now_ms": 0.0,
+        "oldest_ready_ms": 0.0,
+        "recovery_eta_from_now_ms": 0.05
+      },
+      "decision": "dispatch-now",
+      "fissionspec_dispatch_at_ms": 0.0,
+      "id": "current-deadline-forces-dispatch",
+      "immediate_fission_dispatch_at_ms": 0.0,
+      "reason": "A tight current-cohort deadline vetoes otherwise attractive re-fusion."
+    },
+    {
+      "context": {
+        "current_deadline_ms": 100.0,
+        "current_rows": 1,
+        "future_deadline_ms": 5.0,
+        "future_rows": 8,
+        "now_ms": 0.0,
+        "oldest_ready_ms": 0.0,
+        "recovery_eta_from_now_ms": 0.05
+      },
+      "decision": "re-fuse",
+      "fissionspec_dispatch_at_ms": 0.05,
+      "id": "future-deadline-favors-refusion",
+      "immediate_fission_dispatch_at_ms": 0.0,
+      "reason": "A future-cohort deadline can favor one fused launch over launch-now blocking."
+    },
+    {
+      "context": {
+        "current_deadline_ms": 100.0,
+        "current_rows": 16,
+        "future_deadline_ms": 100.0,
+        "future_rows": 1,
+        "now_ms": 0.0,
+        "oldest_ready_ms": 0.0,
+        "recovery_eta_from_now_ms": 0.05
+      },
+      "decision": "dispatch-now",
+      "fissionspec_dispatch_at_ms": 0.0,
+      "id": "capacity-forces-dispatch",
+      "immediate_fission_dispatch_at_ms": 0.0,
+      "reason": "A full current target batch dispatches without waiting."
+    }
+  ],
+  "claim_boundary": "Deterministic policy decision surface only; it is not throughput, latency, or GPU-performance evidence.",
+  "comparison": {
+    "baseline": "immediate-fission",
+    "candidate": "fissionspec-horizon-2",
+    "interpretation": "re-fuse means the real horizon-2 policy waits for the known next readiness ETA while the real immediate-fission policy launches now"
+  },
+  "controller": {
+    "lookahead": "next readiness event only",
+    "max_wait_ms": 2.0,
+    "objective": "modeled aggregate flow time over current plus next readiness set"
+  },
+  "evidence_class": "synthetic-policy-model",
+  "hardware_profile": {
+    "draft_curve_rows_to_ms": [
+      [
+        1,
+        0.55
+      ],
+      [
+        4,
+        0.78
+      ],
+      [
+        8,
+        1.05
+      ],
+      [
+        16,
+        1.65
+      ],
+      [
+        32,
+        2.85
+      ]
+    ],
+    "gpu_measurement": false,
+    "name": "synthetic-controller-phase-not-gpu",
+    "recovery_curve_rows_to_ms": [
+      [
+        1,
+        1.25
+      ],
+      [
+        4,
+        1.7
+      ],
+      [
+        8,
+        2.3
+      ],
+      [
+        16,
+        3.5
+      ],
+      [
+        32,
+        5.9
+      ]
+    ],
+    "target_curve_rows_to_ms": [
+      [
+        1,
+        2.1
+      ],
+      [
+        4,
+        2.8
+      ],
+      [
+        8,
+        3.8
+      ],
+      [
+        16,
+        5.9
+      ],
+      [
+        32,
+        10.5
+      ]
+    ],
+    "verifier_slot_ms": 0.018
+  },
+  "legend": {
+    "dispatch-now": "launch the current ready cohort immediately",
+    "re-fuse": "wait until the known recovery ETA and launch one fused cohort"
+  },
+  "measurement_warning": "SYNTHETIC MODEL / NOT GPU",
+  "panels": [
+    {
+      "decision_matrix_current_by_future": [
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ]
+      ],
+      "re_fuse_cells": 12,
+      "recovery_eta_from_now_ms": 0.05,
+      "total_cells": 16
+    },
+    {
+      "decision_matrix_current_by_future": [
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "dispatch-now",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ]
+      ],
+      "re_fuse_cells": 11,
+      "recovery_eta_from_now_ms": 0.1,
+      "total_cells": 16
+    },
+    {
+      "decision_matrix_current_by_future": [
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ]
+      ],
+      "re_fuse_cells": 8,
+      "recovery_eta_from_now_ms": 0.25,
+      "total_cells": 16
+    },
+    {
+      "decision_matrix_current_by_future": [
+        [
+          "re-fuse",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "dispatch-now",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ]
+      ],
+      "re_fuse_cells": 7,
+      "recovery_eta_from_now_ms": 0.5,
+      "total_cells": 16
+    },
+    {
+      "decision_matrix_current_by_future": [
+        [
+          "dispatch-now",
+          "re-fuse",
+          "re-fuse",
+          "re-fuse"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ]
+      ],
+      "re_fuse_cells": 3,
+      "recovery_eta_from_now_ms": 1.0,
+      "total_cells": 16
+    },
+    {
+      "decision_matrix_current_by_future": [
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ]
+      ],
+      "re_fuse_cells": 0,
+      "recovery_eta_from_now_ms": 1.5,
+      "total_cells": 16
+    },
+    {
+      "decision_matrix_current_by_future": [
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ],
+        [
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now",
+          "dispatch-now"
+        ]
+      ],
+      "re_fuse_cells": 0,
+      "recovery_eta_from_now_ms": 2.01,
+      "total_cells": 16
+    }
+  ],
+  "schema_version": 1,
+  "summary": {
+    "dispatch_now_cells": 71,
+    "re_fuse_cells": 41,
+    "total_cells": 112
+  }
+}
