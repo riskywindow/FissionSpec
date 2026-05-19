@@ -109,14 +109,14 @@ class _PrefixPolicy:
         self.consumed_actions = 0
         self._committed_wait_until_ms: float | None = None
 
-    @staticmethod
-    def _has_wait_branch(context: DispatchContext) -> bool:
+    @classmethod
+    def _has_wait_branch(cls, context: DispatchContext) -> bool:
         next_time = context.next_ready_time_ms
         return (
             next_time is not None
             and context.next_ready_count > 0
             and math.isfinite(next_time)
-            and next_time > context.now_ms
+            and next_time > context.now_ms + cls._EPSILON
         )
 
     def dispatch_at(self, context: DispatchContext) -> float:
