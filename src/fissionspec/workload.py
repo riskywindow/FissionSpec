@@ -23,18 +23,23 @@ def _finite_non_negative(value: float, field: str) -> None:
 class RequestConfig:
     """Immutable input for one generation request.
 
-    ``acceptance_probability`` is the probability that an entire speculative
-    block is accepted.  A tuple supplies a per-round trace; rounds beyond the
-    tuple use its final value.  This compact model is intentional: it exposes
-    the batching externality without conflating it with a particular draft
-    model's token-level acceptance implementation.
+    Cache lookup and token productivity are intentionally independent:
+    ``cache_hit_probability`` controls whether SSD has a prepared continuation,
+    while ``token_acceptance_probability`` controls the accepted-prefix length
+    inside the current verifier block.  Either may be a per-round tuple; rounds
+    beyond a tuple use its final value.
+
+    ``arrival_ms`` is the time at which decoding is ready after prefill and the
+    initial proposal.  This steady-state decoder model does not charge TTFT,
+    prefill, or ``prompt_tokens`` to either simulated engine.
     """
 
     request_id: str
     arrival_ms: float = 0.0
     output_tokens: int = 32
     speculation_length: int = 4
-    acceptance_probability: ProbabilitySchedule = 0.8
+    cache_hit_probability: ProbabilitySchedule = 0.8
+    token_acceptance_probability: ProbabilitySchedule = 0.8
     tbt_slo_ms: float = 50.0
     deadline_ms: float | None = None
     prompt_tokens: int = 0
@@ -67,31 +72,50 @@ class RequestConfig:
         ):
             raise ValueError("prompt_tokens must be a non-negative integer")
 
-        probabilities = self.acceptance_probability
+        self._validate_schedule(
+            self.cache_hit_probability, field="cache_hit_probability"
+        )
+        self._validate_schedule(
+            self.token_acceptance_probability,
+            field="token_acceptance_probability",
+        )
+
+    @classmethod
+    def _validate_schedule(
+        cls, probabilities: ProbabilitySchedule, *, field: str
+    ) -> None:
         if isinstance(probabilities, tuple):
             if not probabilities:
-                raise ValueError("acceptance_probability tuple must not be empty")
+                raise ValueError(f"{field} tuple must not be empty")
             for probability in probabilities:
-                self._validate_probability(probability)
+                cls._validate_probability(probability, field=field)
         else:
-            self._validate_probability(probabilities)
+            cls._validate_probability(probabilities, field=field)
 
     @staticmethod
-    def _validate_probability(probability: float) -> None:
+    def _validate_probability(probability: float, *, field: str) -> None:
         if isinstance(probability, bool) or not isinstance(probability, (int, float)):
-            raise TypeError("acceptance probabilities must be real numbers")
+            raise TypeError(f"{field} values must be real numbers")
         if not math.isfinite(float(probability)) or not 0.0 <= probability <= 1.0:
-            raise ValueError("acceptance probabilities must be in [0, 1]")
+            raise ValueError(f"{field} values must be in [0, 1]")
 
-    def probability_for_round(self, round_id: int) -> float:
-        """Return the whole-block hit probability for ``round_id``."""
-
+    @staticmethod
+    def _for_round(probabilities: ProbabilitySchedule, round_id: int) -> float:
         if isinstance(round_id, bool) or not isinstance(round_id, int) or round_id < 0:
             raise ValueError("round_id must be a non-negative integer")
-        probabilities = self.acceptance_probability
         if isinstance(probabilities, tuple):
             return float(probabilities[min(round_id, len(probabilities) - 1)])
         return float(probabilities)
+
+    def cache_hit_probability_for_round(self, round_id: int) -> float:
+        """Return the independent SSD continuation-cache hit probability."""
+
+        return self._for_round(self.cache_hit_probability, round_id)
+
+    def token_acceptance_probability_for_round(self, round_id: int) -> float:
+        """Return the per-candidate prefix-acceptance probability."""
+
+        return self._for_round(self.token_acceptance_probability, round_id)
 
     @property
     def absolute_deadline_ms(self) -> float:
@@ -132,7 +156,8 @@ class Workload:
         arrival_interval_ms: float = 0.0,
         output_tokens: int = 32,
         speculation_length: int = 4,
-        acceptance_probability: ProbabilitySchedule = 0.8,
+        cache_hit_probability: ProbabilitySchedule = 0.8,
+        token_acceptance_probability: ProbabilitySchedule = 0.8,
         tbt_slo_ms: float = 50.0,
         id_prefix: str = "r",
         name: str = "homogeneous",
@@ -149,7 +174,8 @@ class Workload:
                     arrival_ms=index * arrival_interval_ms,
                     output_tokens=output_tokens,
                     speculation_length=speculation_length,
-                    acceptance_probability=acceptance_probability,
+                    cache_hit_probability=cache_hit_probability,
+                    token_acceptance_probability=token_acceptance_probability,
                     tbt_slo_ms=tbt_slo_ms,
                 )
                 for index in range(count)

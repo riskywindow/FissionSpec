@@ -23,7 +23,7 @@ from .workload import RequestConfig, Workload
 
 _POLICIES = (
     "saguaro-barrier",
-    "spectre-padded",
+    "spectre-parallel-padded",
     "immediate-fission",
     "fixed-coalesce",
     "fissionspec-horizon-2",
@@ -32,6 +32,7 @@ _POLICY_NAMES = (
     *_POLICIES,
     "saguaro",
     "spectre",
+    "spectre-padded",
     "immediate",
     "fission",
     "fixed",
@@ -56,7 +57,8 @@ def _add_simulation_arguments(
     parser.add_argument("--arrival-interval-ms", type=float, default=0.15)
     parser.add_argument("--output-tokens", type=int, default=64)
     parser.add_argument("--speculation-length", type=int, default=4)
-    parser.add_argument("--acceptance-probability", type=float, default=0.8)
+    parser.add_argument("--cache-hit-probability", type=float, default=0.8)
+    parser.add_argument("--token-acceptance-probability", type=float, default=0.8)
     parser.add_argument("--tbt-slo-ms", type=float, default=50.0)
     parser.add_argument("--max-batch-size", type=int, default=16)
     parser.add_argument("--coalesce-ms", type=float, default=1.0)
@@ -101,9 +103,13 @@ def load_workload_json(path: Path) -> Workload:
         if not isinstance(item, dict):
             raise ValueError("each request must be a JSON object")
         values = dict(item)
-        probability = values.get("acceptance_probability")
-        if isinstance(probability, list):
-            values["acceptance_probability"] = tuple(float(value) for value in probability)
+        for field in (
+            "cache_hit_probability",
+            "token_acceptance_probability",
+        ):
+            probability = values.get(field)
+            if isinstance(probability, list):
+                values[field] = tuple(float(value) for value in probability)
         requests.append(RequestConfig(**values))
     return Workload(tuple(requests), name=str(raw.get("name", path.stem)))
 
@@ -158,7 +164,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     # Preserve the original flat simulation interface for existing experiment
     # scripts while making the explicit subcommands the documented surface.
-    if arguments and arguments[0].startswith("-"):
+    if (
+        arguments
+        and arguments[0].startswith("-")
+        and arguments[0] not in {"-h", "--help"}
+    ):
         arguments.insert(0, "simulate")
     args = _parser().parse_args(arguments)
     if args.command == "theory":
@@ -179,7 +189,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             arrival_interval_ms=args.arrival_interval_ms,
             output_tokens=args.output_tokens,
             speculation_length=args.speculation_length,
-            acceptance_probability=args.acceptance_probability,
+            cache_hit_probability=args.cache_hit_probability,
+            token_acceptance_probability=args.token_acceptance_probability,
             tbt_slo_ms=args.tbt_slo_ms,
         )
     )

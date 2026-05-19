@@ -27,6 +27,8 @@ class DispatchContext:
     profile: HardwareProfile
     next_ready_time_ms: float | None = None
     next_ready_count: int = 0
+    earliest_future_deadline_ms: float | None = None
+    next_slots_per_row: int | None = None
 
     def __post_init__(self) -> None:
         if self.ready_count <= 0:
@@ -37,6 +39,8 @@ class DispatchContext:
             raise ValueError("slots_per_row must be positive")
         if self.next_ready_count < 0:
             raise ValueError("next_ready_count must be non-negative")
+        if self.next_slots_per_row is not None and self.next_slots_per_row <= 0:
+            raise ValueError("next_slots_per_row must be positive when supplied")
 
 
 @runtime_checkable
@@ -58,7 +62,7 @@ class SchedulingPolicy(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class SaguaroBarrierPolicy:
-    """Cohort barrier: one miss sends every surviving row through recovery."""
+    """Miss-only fallback that holds all surviving rows behind a cohort barrier."""
 
     name: str = "saguaro-barrier"
     barrier_on_miss: bool = True
@@ -70,9 +74,14 @@ class SaguaroBarrierPolicy:
 
 @dataclass(frozen=True, slots=True)
 class SPECTREPaddedPolicy:
-    """Mixed semantics: recovering misses occupy one-token padded target rows."""
+    """SPECTRE parallel-mode semantics with one-token padded recovery rows.
 
-    name: str = "spectre-padded"
+    This is intentionally not SPECTRE's hybrid selector.  The simulator models
+    one padded target step per recovery chain, then fences a stale recovery and
+    completes its version repair without another padded step.
+    """
+
+    name: str = "spectre-parallel-padded"
     barrier_on_miss: bool = False
     pad_recovering_misses: bool = True
 
@@ -146,10 +155,6 @@ class FissionSpecPolicy:
         if not math.isfinite(self.max_wait_ms) or self.max_wait_ms < 0.0:
             raise ValueError("max_wait_ms must be finite and non-negative")
 
-    @staticmethod
-    def _latency(context: DispatchContext, rows: int) -> float:
-        return context.profile.target_latency_ms(rows, rows * context.slots_per_row)
-
     def dispatch_at(self, context: DispatchContext) -> float:
         if context.ready_count >= context.capacity:
             return context.now_ms
@@ -157,46 +162,81 @@ class FissionSpecPolicy:
         if next_time is None or context.next_ready_count == 0:
             return context.now_ms
         delay = max(0.0, next_time - context.now_ms)
-        if delay <= 0.0 or delay > self.max_wait_ms:
+        hard_wait_deadline = context.oldest_ready_ms + self.max_wait_ms
+        if (
+            delay <= 0.0
+            or context.now_ms >= hard_wait_deadline
+            or next_time > hard_wait_deadline
+        ):
             return context.now_ms
 
         now_rows = context.ready_count
         future_rows = context.next_ready_count
-        first_latency = self._latency(context, now_rows)
+        future_slots_per_row = (
+            context.next_slots_per_row
+            if context.next_slots_per_row is not None
+            else context.slots_per_row
+        )
+        future_deadline = (
+            context.earliest_future_deadline_ms
+            if context.earliest_future_deadline_ms is not None
+            else math.inf
+        )
+        first_latency = context.profile.target_latency_ms(
+            now_rows, now_rows * context.slots_per_row
+        )
 
         # Launch-now aggregate flow cost.  Future chunks arrive at ``delta``
         # but cannot use the target until its current launch has completed.
-        target_available = max(delay, first_latency)
+        target_available = max(next_time, context.now_ms + first_latency)
         launch_now_cost = now_rows * first_latency
+        launch_now_feasible = (
+            context.now_ms + first_latency <= context.earliest_deadline_ms
+        )
         remaining_future = future_rows
         while remaining_future > 0:
             chunk = min(remaining_future, context.capacity)
-            target_available += self._latency(context, chunk)
-            launch_now_cost += chunk * (target_available - delay)
+            target_available += context.profile.target_latency_ms(
+                chunk, chunk * future_slots_per_row
+            )
+            launch_now_cost += chunk * (target_available - next_time)
+            launch_now_feasible = (
+                launch_now_feasible and target_available <= future_deadline
+            )
             remaining_future -= chunk
 
         # Wait aggregate flow cost.  Ready rows retain priority in the first
         # coalesced chunk, so only future rows can overflow behind them.
         first_wait_rows = min(now_rows + future_rows, context.capacity)
-        first_wait_latency = self._latency(context, first_wait_rows)
-        wait_completion = delay + first_wait_latency
-        wait_cost = now_rows * wait_completion
         future_in_first = max(0, first_wait_rows - now_rows)
-        wait_cost += future_in_first * first_wait_latency
+        first_wait_slots = (
+            now_rows * context.slots_per_row
+            + future_in_first * future_slots_per_row
+        )
+        first_wait_latency = context.profile.target_latency_ms(
+            first_wait_rows, first_wait_slots
+        )
+        wait_completion = next_time + first_wait_latency
+        wait_cost = now_rows * (wait_completion - context.now_ms)
+        wait_cost += future_in_first * (wait_completion - next_time)
+        wait_feasible = wait_completion <= context.earliest_deadline_ms
+        if future_in_first:
+            wait_feasible = wait_feasible and wait_completion <= future_deadline
         remaining_future = future_rows - future_in_first
         while remaining_future > 0:
             chunk = min(remaining_future, context.capacity)
-            wait_completion += self._latency(context, chunk)
-            wait_cost += chunk * (wait_completion - delay)
+            wait_completion += context.profile.target_latency_ms(
+                chunk, chunk * future_slots_per_row
+            )
+            wait_cost += chunk * (wait_completion - next_time)
+            wait_feasible = wait_feasible and wait_completion <= future_deadline
             remaining_future -= chunk
 
-        predicted_completion = next_time + first_wait_latency
-        misses_deadline = predicted_completion > context.earliest_deadline_ms
-        return (
-            context.now_ms
-            if misses_deadline or wait_cost >= launch_now_cost
-            else next_time
-        )
+        if not wait_feasible:
+            return context.now_ms
+        if not launch_now_feasible:
+            return next_time
+        return next_time if wait_cost < launch_now_cost else context.now_ms
 
 
 Horizon2Policy = FissionSpecPolicy
@@ -210,7 +250,12 @@ def policy_from_name(
     normalized = name.strip().lower().replace("_", "-")
     if normalized in {"saguaro", "saguaro-barrier", "barrier"}:
         return SaguaroBarrierPolicy()
-    if normalized in {"spectre", "spectre-padded", "padded"}:
+    if normalized in {
+        "spectre",
+        "spectre-padded",
+        "spectre-parallel-padded",
+        "padded",
+    }:
         return SPECTREPaddedPolicy()
     if normalized in {"immediate", "immediate-fission", "fission"}:
         return ImmediateFissionPolicy()

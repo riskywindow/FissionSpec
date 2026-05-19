@@ -22,7 +22,19 @@ def batch_fallback_probability(hit_probabilities: Iterable[float]) -> float:
     """Return ``P(any miss) = 1 - product(p_i)`` for a verifier batch."""
 
     probabilities = _probabilities(hit_probabilities)
-    return 1.0 - math.prod(probabilities)
+    if any(probability == 0.0 for probability in probabilities):
+        return 1.0
+    log_product = math.fsum(
+        (
+            math.log(probability)
+            if probability < 0.5
+            else math.log1p(probability - 1.0)
+        )
+        for probability in probabilities
+    )
+    # -expm1(log(product)) preserves rare fallback probabilities that would be
+    # rounded away by evaluating ``1 - product`` directly.
+    return min(1.0, max(0.0, -math.expm1(log_product)))
 
 
 def expected_collateral_hit_stalls(hit_probabilities: Iterable[float]) -> float:
@@ -34,12 +46,14 @@ def expected_collateral_hit_stalls(hit_probabilities: Iterable[float]) -> float:
     """
 
     probabilities = _probabilities(hit_probabilities)
+    if len(probabilities) == 1:
+        return 0.0
     total = 0.0
     for index, probability in enumerate(probabilities):
-        other_hit_probability = math.prod(
+        other_probabilities = (
             value for other_index, value in enumerate(probabilities) if other_index != index
         )
-        total += probability * (1.0 - other_hit_probability)
+        total += probability * batch_fallback_probability(other_probabilities)
     return total
 
 
@@ -94,6 +108,12 @@ class SimulationMetrics:
     policy_name: str
     requests: int
     output_tokens: int
+    cache_hits: int
+    cache_misses: int
+    observed_cache_hit_rate: float
+    accepted_draft_tokens: int
+    verifier_emitted_tokens: int
+    mean_verifier_tokens_per_round: float
     makespan_ms: float
     p50_tbt_ms: float
     p95_tbt_ms: float
@@ -140,13 +160,19 @@ def summarize(result: SimulationResult) -> SimulationMetrics:
     slo_successes = 0
     total_hits = 0
     total_externality = 0.0
+    accepted_draft_tokens = 0
+    verifier_emitted_tokens = 0
     for request in result.requests:
         gaps = request.inter_token_times_ms
         tbt_values.extend(gaps)
         slo_successes += sum(gap <= request.tbt_slo_ms for gap in gaps)
         total_hits += request.hits
         total_externality += request.hit_externality_ms
+        accepted_draft_tokens += request.accepted_draft_tokens
+        verifier_emitted_tokens += request.verifier_emitted_tokens
 
+    total_misses = sum(request.misses for request in result.requests)
+    total_rounds = total_hits + total_misses
     makespan = result.makespan_ms
     throughput = (
         result.total_output_tokens * 1000.0 / makespan if makespan > 0.0 else 0.0
@@ -163,6 +189,14 @@ def summarize(result: SimulationResult) -> SimulationMetrics:
         policy_name=result.policy_name,
         requests=len(result.requests),
         output_tokens=result.total_output_tokens,
+        cache_hits=total_hits,
+        cache_misses=total_misses,
+        observed_cache_hit_rate=(total_hits / total_rounds if total_rounds else 0.0),
+        accepted_draft_tokens=accepted_draft_tokens,
+        verifier_emitted_tokens=verifier_emitted_tokens,
+        mean_verifier_tokens_per_round=(
+            verifier_emitted_tokens / total_rounds if total_rounds else 0.0
+        ),
         makespan_ms=makespan,
         p50_tbt_ms=percentile(tbt_values, 0.50),
         p95_tbt_ms=percentile(tbt_values, 0.95),
@@ -204,6 +238,14 @@ def counterfactual_metrics(
 ) -> CounterfactualMetrics:
     """Compare paired policy traces produced from the same keyed RNG seed."""
 
+    candidate_ids = tuple(request.request_id for request in candidate.requests)
+    baseline_ids = tuple(request.request_id for request in baseline.requests)
+    if candidate_ids != baseline_ids:
+        raise ValueError("counterfactual traces must contain identical request IDs")
+    if candidate.workload != baseline.workload:
+        raise ValueError("counterfactual traces must use identical workload configs")
+    if candidate.profile != baseline.profile:
+        raise ValueError("counterfactual traces must use an identical hardware profile")
     candidate_metrics = summarize(candidate)
     baseline_metrics = summarize(baseline)
     if candidate_metrics.output_tokens != baseline_metrics.output_tokens:

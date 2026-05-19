@@ -32,19 +32,14 @@ from .workload import Workload
 class ScheduleIndependentRNG(Protocol):
     """Local protocol for a stateless, counter-addressed random source.
 
-    ``draw`` defaults to zero so both the minimal three-key interface and the
-    repository's more general ``CounterRNG`` can be injected.
+    All semantic randomness has an explicit stream and draw index.  There is no
+    mutable consumption order for a scheduling decision to perturb.
     """
 
     def uniform(
-        self, request_id: str, round_id: int, stream: str, draw: int = 0
+        self, request_id: str, round_id: int, stream: str, draw: int
     ) -> float:
         """Return a deterministic value in the half-open interval ``[0, 1)``."""
-
-
-class _ThreeKeyRNG(Protocol):
-    def uniform(self, request_id: str, round_id: int, stream: str) -> float: ...
-
 
 class SimulationError(RuntimeError):
     """Raised when an invalid event trace would prevent forward progress."""
@@ -88,6 +83,7 @@ class _TargetPayload:
     padded_verifier_slots: int
     no_padding_latency_ms: float
     request_rounds: tuple[tuple[str, int], ...]
+    request_widths: tuple[tuple[str, int], ...]
     precompute_end_ms: float | None
 
 
@@ -96,10 +92,11 @@ class Simulator:
 
     A hit emits a full speculative block; a miss emits its one target token.
     Every real verifier launch concurrently queues next-round outcome-cache
-    construction on the draft engine.  Hits consume that prepared branch at
-    ``max(target_end, precompute_end)``; misses invalidate it and execute the
-    recovery curve. Policy semantics determine whether those outcomes remain
-    coupled on the target timeline.
+    construction on the non-preemptive FIFO draft engine.  Hits consume that
+    prepared branch at ``max(target_end, precompute_end)``; misses invalidate
+    it and execute the recovery curve.  Cache lookup is independent of the
+    accepted-token prefix produced by the current verifier.  Policy semantics
+    determine whether outcomes remain coupled on the target timeline.
     """
 
     _EPSILON = 1e-12
@@ -170,18 +167,36 @@ class Simulator:
         self._sequence += 1
         heapq.heappush(self._events, _Event(time_ms, self._sequence, kind, payload))
 
-    def _uniform(self, request_id: str, round_id: int) -> float:
-        """Call the four-key API, retaining compatibility with minimal fakes."""
-
-        try:
-            value = self.rng.uniform(request_id, round_id, "acceptance", 0)
-        except TypeError:
-            value = cast(_ThreeKeyRNG, self.rng).uniform(
-                request_id, round_id, "acceptance"
-            )
+    def _uniform(
+        self, request_id: str, round_id: int, stream: str, draw: int
+    ) -> float:
+        value = self.rng.uniform(request_id, round_id, stream, draw)
         if not math.isfinite(value) or not 0.0 <= value < 1.0:
             raise SimulationError("rng.uniform must return a finite value in [0, 1)")
         return value
+
+    def _token_productivity(
+        self, request_id: str, round_id: int, width: int
+    ) -> tuple[int, int]:
+        """Return ``(accepted_draft_tokens, emitted_tokens)`` for one block."""
+
+        probability = self._configs[
+            request_id
+        ].token_acceptance_probability_for_round(round_id)
+        accepted = 0
+        for draw in range(width - 1):
+            if (
+                self._uniform(
+                    request_id, round_id, "token-acceptance", draw
+                )
+                < probability
+            ):
+                accepted += 1
+            else:
+                break
+        # The target contributes a correction/bonus token after the accepted
+        # prefix, capped by the in-flight verifier width.
+        return accepted, accepted + 1
 
     def _handle_arrival(self, request_id: str) -> None:
         state = self._states[request_id]
@@ -365,11 +380,13 @@ class Simulator:
                 pad_redraft_ids.append(request_id)
 
         outcomes: list[tuple[str, Outcome]] = []
+        accepted_tokens: list[tuple[str, int]] = []
+        productive_tokens: list[tuple[str, int]] = []
         hit_survivors: list[str] = []
         hit_survivor_rounds: list[tuple[str, int]] = []
-        miss_ids: list[str] = []
         miss_survivors: list[str] = []
         launched_rounds = dict(payload.request_rounds)
+        launched_widths = dict(payload.request_widths)
         for request_id in payload.request_ids:
             state = self._states[request_id]
             if state.phase is not RequestPhase.IN_TARGET:
@@ -380,22 +397,28 @@ class Simulator:
             round_id = state.round_id
             if launched_rounds.get(request_id) != round_id:
                 raise SimulationError("target round changed while launch was in flight")
-            hit = self._uniform(request_id, round_id) < config.probability_for_round(
-                round_id
+            width = launched_widths[request_id]
+            accepted, productive = self._token_productivity(
+                request_id, round_id, width
             )
+            cache_hit = self._uniform(
+                request_id, round_id, "cache-hit", 0
+            ) < config.cache_hit_probability_for_round(round_id)
+            emitted = state.emit(productive, self._now_ms)
+            state.accepted_draft_tokens += min(accepted, emitted)
+            state.verifier_emitted_tokens += emitted
+            accepted_tokens.append((request_id, min(accepted, emitted)))
+            productive_tokens.append((request_id, emitted))
             state.round_id += 1
-            if hit:
+            if cache_hit:
                 outcome = Outcome.HIT
                 state.hits += 1
-                state.emit(state.speculation_length, self._now_ms)
                 if state.remaining_tokens > 0:
                     hit_survivors.append(request_id)
                     hit_survivor_rounds.append((request_id, round_id))
             else:
                 outcome = Outcome.MISS
                 state.misses += 1
-                miss_ids.append(request_id)
-                state.emit(1, self._now_ms)
                 if state.remaining_tokens > 0:
                     miss_survivors.append(request_id)
             outcomes.append((request_id, outcome))
@@ -407,20 +430,24 @@ class Simulator:
                 if outcome is Outcome.HIT:
                     self._states[request_id].hit_externality_ms += padding_delay
 
-        if self.policy.barrier_on_miss and miss_ids and (
-            hit_survivors or miss_survivors
-        ):
-            recovery_duration = self.profile.draft_latency_ms(
-                len(miss_ids), recovery=True
-            )
-            for request_id in hit_survivors:
-                self._states[request_id].hit_externality_ms += recovery_duration
-            self._schedule_draft(
-                tuple(miss_ids),
+        if self.policy.barrier_on_miss and miss_survivors:
+            recovery_end_ms = self._schedule_draft(
+                tuple(miss_survivors),
                 recovery=True,
                 barrier=True,
                 held_request_ids=tuple(hit_survivors),
             )
+            if recovery_end_ms is None:
+                raise SimulationError("barrier recovery did not schedule")
+            local_hit_eligibility_ms = max(
+                self._now_ms,
+                payload.precompute_end_ms
+                if payload.precompute_end_ms is not None
+                else self._now_ms,
+            )
+            barrier_delay = max(0.0, recovery_end_ms - local_hit_eligibility_ms)
+            for request_id in hit_survivors:
+                self._states[request_id].hit_externality_ms += barrier_delay
         else:
             # SSD hits consume the branch constructed concurrently with the
             # target verification. Misses invalidate that work and recover.
@@ -438,6 +465,8 @@ class Simulator:
                 request_ids=payload.request_ids,
                 padded_request_ids=payload.padded_request_ids,
                 outcomes=tuple(outcomes),
+                accepted_tokens=tuple(accepted_tokens),
+                productive_tokens=tuple(productive_tokens),
                 verifier_slots=payload.verifier_slots,
                 padded_verifier_slots=payload.padded_verifier_slots,
             )
@@ -489,41 +518,58 @@ class Simulator:
                 and ready_ms > self._now_ms + self._EPSILON
             ):
                 active.append(request_id)
-        return tuple(sorted(active))
+        return tuple(sorted(active)[: self.max_batch_size])
 
-    def _next_readiness(self) -> tuple[float | None, int]:
+    def _next_readiness(
+        self,
+    ) -> tuple[float | None, int, float | None, int | None]:
         next_time: float | None = None
-        count = 0
+        next_request_ids: list[str] = []
         for event in self._events:
-            event_count = 0
+            event_request_ids: list[str] = []
             if event.kind is _EventKind.ARRIVAL:
                 request_id = cast(str, event.payload)
                 if self._states[request_id].phase is RequestPhase.NOT_ARRIVED:
-                    event_count = 1
+                    event_request_ids.append(request_id)
             elif event.kind is _EventKind.DRAFT_READY:
                 payload = cast(_DraftReadyPayload, event.payload)
-                event_count = sum(
-                    1
-                    for request_id, epoch, _ in payload.requests
+                event_request_ids.extend(
+                    request_id
+                    for request_id, epoch, logical_version in payload.requests
                     if self._states[request_id].phase is RequestPhase.WAIT_DRAFT
                     and self._states[request_id].recovery_epoch == epoch
+                    and self._states[request_id].logical_version == logical_version
                 )
             elif event.kind is _EventKind.PRECOMPUTE_READY:
                 precompute = cast(_PrecomputeReadyPayload, event.payload)
-                event_count = sum(
-                    1
+                event_request_ids.extend(
+                    request_id
                     for request_id, round_id in precompute.requests
                     if self._states[request_id].phase is RequestPhase.WAIT_DRAFT
                     and self._states[request_id].waiting_precompute_round == round_id
                 )
-            if event_count == 0:
+            if not event_request_ids:
                 continue
             if next_time is None or event.time_ms < next_time - self._EPSILON:
                 next_time = event.time_ms
-                count = event_count
+                next_request_ids = event_request_ids
             elif abs(event.time_ms - next_time) <= self._EPSILON:
-                count += event_count
-        return next_time, count
+                next_request_ids.extend(event_request_ids)
+        unique_request_ids = tuple(dict.fromkeys(next_request_ids))
+        if not unique_request_ids:
+            return None, 0, None, None
+        earliest_deadline = min(
+            self._states[request_id].absolute_deadline_ms
+            for request_id in unique_request_ids
+        )
+        slots_per_row = max(
+            min(
+                self._states[request_id].speculation_length,
+                self._states[request_id].remaining_tokens,
+            )
+            for request_id in unique_request_ids
+        )
+        return next_time, len(unique_request_ids), earliest_deadline, slots_per_row
 
     def _schedule_wake(self, time_ms: float) -> None:
         if time_ms in self._wake_times:
@@ -535,22 +581,56 @@ class Simulator:
         self, real_states: list[RequestState], padded_ids: tuple[str, ...]
     ) -> None:
         request_ids = tuple(state.request_id for state in real_states)
-        real_slots = sum(state.speculation_length for state in real_states)
+        request_widths = tuple(
+            (
+                state.request_id,
+                min(state.speculation_length, state.remaining_tokens),
+            )
+            for state in real_states
+        )
+        real_slots = sum(width for _, width in request_widths)
         padded_slots = sum(
-            max(0, self._states[request_id].speculation_length - 1)
+            max(
+                0,
+                min(
+                    self._states[request_id].speculation_length,
+                    self._states[request_id].remaining_tokens,
+                )
+                - 1,
+            )
             for request_id in padded_ids
         )
         verifier_slots = real_slots + sum(
-            self._states[request_id].speculation_length for request_id in padded_ids
+            min(
+                self._states[request_id].speculation_length,
+                self._states[request_id].remaining_tokens,
+            )
+            for request_id in padded_ids
         )
         effective_rows = len(request_ids) + len(padded_ids)
         if effective_rows <= 0:
             raise SimulationError("target launches require at least one row")
+        if effective_rows > self.max_batch_size:
+            raise SimulationError("target launch exceeds max_batch_size")
 
         request_rounds = tuple(
             (state.request_id, state.round_id) for state in real_states
         )
-        precompute_end_ms = self._schedule_precompute(request_rounds)
+        precompute_requests = tuple(
+            (state.request_id, state.round_id)
+            for state in real_states
+            if not (
+                state.remaining_tokens == 1
+                or (
+                    state.remaining_tokens <= state.speculation_length
+                    and self._configs[
+                        state.request_id
+                    ].token_acceptance_probability_for_round(state.round_id)
+                    == 1.0
+                )
+            )
+        )
+        precompute_end_ms = self._schedule_precompute(precompute_requests)
         for state in real_states:
             state.phase = RequestPhase.IN_TARGET
             state.ready_since_ms = None
@@ -576,6 +656,7 @@ class Simulator:
             padded_verifier_slots=padded_slots,
             no_padding_latency_ms=no_padding_latency,
             request_rounds=request_rounds,
+            request_widths=request_widths,
             precompute_end_ms=precompute_end_ms,
         )
         self._push(end_ms, _EventKind.TARGET_COMPLETE, payload)
@@ -595,8 +676,16 @@ class Simulator:
             return
 
         selected = ready[:capacity]
-        next_ready_time, next_ready_count = self._next_readiness()
-        slots_per_row = max(state.speculation_length for state in selected)
+        (
+            next_ready_time,
+            next_ready_count,
+            earliest_future_deadline,
+            next_slots_per_row,
+        ) = self._next_readiness()
+        slots_per_row = max(
+            min(state.speculation_length, state.remaining_tokens)
+            for state in selected
+        )
         context = DispatchContext(
             now_ms=self._now_ms,
             ready_count=len(ready),
@@ -609,6 +698,8 @@ class Simulator:
             profile=self.profile,
             next_ready_time_ms=next_ready_time,
             next_ready_count=next_ready_count,
+            earliest_future_deadline_ms=earliest_future_deadline,
+            next_slots_per_row=next_slots_per_row,
         )
         dispatch_at = self.policy.dispatch_at(context)
         if not math.isfinite(dispatch_at) or dispatch_at < self._now_ms - self._EPSILON:
@@ -662,6 +753,8 @@ class Simulator:
                 token_times_ms=tuple(state.token_times_ms),
                 hits=state.hits,
                 misses=state.misses,
+                accepted_draft_tokens=state.accepted_draft_tokens,
+                verifier_emitted_tokens=state.verifier_emitted_tokens,
                 tbt_slo_ms=state.tbt_slo_ms,
                 hit_externality_ms=state.hit_externality_ms,
             )
@@ -673,6 +766,8 @@ class Simulator:
             policy_name=self.policy.name,
             hardware_name=self.profile.name,
             workload_name=self.workload.name,
+            profile=self.profile,
+            workload=self.workload,
             requests=request_results,
             target_launches=tuple(self._target_records),
             draft_launches=tuple(self._draft_records),

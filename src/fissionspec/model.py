@@ -5,10 +5,15 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .profiles import HardwareProfile
+    from .workload import Workload
 
 
 class Outcome(StrEnum):
-    """Result of verifying one speculative block."""
+    """Independent SSD next-continuation cache lookup result."""
 
     HIT = "hit"
     MISS = "miss"
@@ -43,6 +48,8 @@ class RequestState:
     token_times_ms: list[float] = field(default_factory=list)
     hits: int = 0
     misses: int = 0
+    accepted_draft_tokens: int = 0
+    verifier_emitted_tokens: int = 0
     hit_externality_ms: float = 0.0
     recovery_epoch: int = 0
     spectre_padding_eligible: bool = False
@@ -78,6 +85,8 @@ class RequestResult:
     token_times_ms: tuple[float, ...]
     hits: int
     misses: int
+    accepted_draft_tokens: int
+    verifier_emitted_tokens: int
     tbt_slo_ms: float
     hit_externality_ms: float
 
@@ -105,6 +114,8 @@ class TargetLaunchRecord:
     request_ids: tuple[str, ...]
     padded_request_ids: tuple[str, ...]
     outcomes: tuple[tuple[str, Outcome], ...]
+    accepted_tokens: tuple[tuple[str, int], ...]
+    productive_tokens: tuple[tuple[str, int], ...]
     verifier_slots: int
     padded_verifier_slots: int
 
@@ -150,6 +161,8 @@ class SimulationResult:
     policy_name: str
     hardware_name: str
     workload_name: str
+    profile: HardwareProfile
+    workload: Workload
     requests: tuple[RequestResult, ...]
     target_launches: tuple[TargetLaunchRecord, ...]
     draft_launches: tuple[DraftLaunchRecord, ...]

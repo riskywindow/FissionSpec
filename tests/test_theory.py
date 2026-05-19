@@ -27,6 +27,14 @@ class TheoryTests(unittest.TestCase):
         self.assertEqual(observed, sorted(observed))
         self.assertAlmostEqual(observed[-1], 1.0 - probability**8)
 
+    def test_batch_fallback_is_stable_for_rare_and_tiny_probabilities(self) -> None:
+        rare_miss = 1e-12
+        probability = 1.0 - rare_miss
+        observed = batch_fallback_probability([probability] * 1_000)
+        expected = -math.expm1(1_000 * math.log1p(probability - 1.0))
+        self.assertAlmostEqual(observed, expected, places=20)
+        self.assertEqual(batch_fallback_probability([1e-300, 1.0]), 1.0)
+
     def test_collateral_stalls_excludes_the_miss_itself(self) -> None:
         # For two p=.5 rows, either row is a collateral hit-and-stall with
         # probability .25, hence .5 expected collateral rows.

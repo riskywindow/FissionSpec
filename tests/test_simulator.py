@@ -13,6 +13,7 @@ from fissionspec.policies import (
     SPECTREPaddedPolicy,
 )
 from fissionspec.profiles import HardwareProfile, LatencyCurve
+from fissionspec.rng import CounterRNG
 from fissionspec.simulator import SimulationError, simulate
 from fissionspec.workload import RequestConfig, Workload
 
@@ -20,7 +21,7 @@ from fissionspec.workload import RequestConfig, Workload
 class TableRNG:
     def __init__(
         self,
-        values: dict[tuple[str, int], float] | None = None,
+        values: dict[tuple[str, int, str, int], float] | None = None,
         *,
         default: float = 0.0,
     ) -> None:
@@ -32,7 +33,7 @@ class TableRNG:
         self, request_id: str, round_id: int, stream: str, draw: int = 0
     ) -> float:
         self.calls.append((request_id, round_id, stream, draw))
-        return self.values.get((request_id, round_id), self.default)
+        return self.values.get((request_id, round_id, stream, draw), self.default)
 
 
 def test_profile(*, recovery_ms: float = 5.0) -> HardwareProfile:
@@ -53,7 +54,8 @@ def request(
     arrival: float = 0.0,
     output: int = 5,
     speculation: int = 2,
-    probability: float = 1.0,
+    cache_hit: float = 1.0,
+    token_acceptance: float = 1.0,
     slo: float = 50.0,
 ) -> RequestConfig:
     return RequestConfig(
@@ -61,14 +63,102 @@ def request(
         arrival_ms=arrival,
         output_tokens=output,
         speculation_length=speculation,
-        acceptance_probability=probability,
+        cache_hit_probability=cache_hit,
+        token_acceptance_probability=token_acceptance,
         tbt_slo_ms=slo,
     )
 
 
 class SimulatorPolicyTests(unittest.TestCase):
+    def test_cache_outcome_is_independent_of_token_productivity(self) -> None:
+        workload = Workload(
+            (
+                request(
+                    "forced-hit",
+                    output=8,
+                    speculation=4,
+                    cache_hit=1.0,
+                    token_acceptance=0.5,
+                ),
+                request(
+                    "forced-miss",
+                    output=8,
+                    speculation=4,
+                    cache_hit=0.0,
+                    token_acceptance=0.5,
+                ),
+            )
+        )
+        draws = {
+            (request_id, 0, "token-acceptance", 0): 0.1
+            for request_id in ("forced-hit", "forced-miss")
+        }
+        draws.update(
+            {
+                (request_id, 0, "token-acceptance", 1): 0.2
+                for request_id in ("forced-hit", "forced-miss")
+            }
+        )
+        draws.update(
+            {
+                (request_id, 0, "token-acceptance", 2): 0.9
+                for request_id in ("forced-hit", "forced-miss")
+            }
+        )
+        first = simulate(
+            workload,
+            test_profile(),
+            ImmediateFissionPolicy(),
+            TableRNG(draws),
+            max_batch_size=2,
+        ).target_launches[0]
+        self.assertEqual(dict(first.accepted_tokens), {"forced-hit": 2, "forced-miss": 2})
+        self.assertEqual(
+            dict(first.productive_tokens), {"forced-hit": 3, "forced-miss": 3}
+        )
+        self.assertEqual(dict(first.outcomes)["forced-hit"], Outcome.HIT)
+        self.assertEqual(dict(first.outcomes)["forced-miss"], Outcome.MISS)
+
+    def test_token_productivity_boundaries_are_one_to_width(self) -> None:
+        workload = Workload(
+            (
+                request(
+                    "reject",
+                    output=4,
+                    speculation=4,
+                    token_acceptance=0.0,
+                ),
+                request(
+                    "accept",
+                    output=4,
+                    speculation=4,
+                    token_acceptance=1.0,
+                ),
+            )
+        )
+        rng = TableRNG()
+        first = simulate(
+            workload,
+            test_profile(),
+            ImmediateFissionPolicy(),
+            rng,
+            max_batch_size=2,
+        ).target_launches[0]
+        self.assertEqual(dict(first.accepted_tokens), {"accept": 3, "reject": 0})
+        self.assertEqual(dict(first.productive_tokens), {"accept": 4, "reject": 1})
+        accept_draws = [
+            draw
+            for request_id, round_id, stream, draw in rng.calls
+            if request_id == "accept"
+            and round_id == 0
+            and stream == "token-acceptance"
+        ]
+        self.assertEqual(accept_draws, [0, 1, 2])
+
     def test_saguaro_miss_routes_entire_surviving_cohort_to_barrier(self) -> None:
-        workload = Workload((request("hit"), request("miss", probability=0.0)))
+        workload = Workload(
+            (request("hit", output=3), request("miss", cache_hit=0.0))
+        )
         result = simulate(
             workload,
             test_profile(),
@@ -86,10 +176,14 @@ class SimulatorPolicyTests(unittest.TestCase):
         self.assertEqual(barrier.request_ids, ("miss",))
         self.assertEqual(barrier.barrier_victim_ids, ("hit",))
         hit_result = next(item for item in result.requests if item.request_id == "hit")
-        self.assertGreater(hit_result.hit_externality_ms, 0.0)
+        local_eligibility = max(first_target.end_ms, first_draft.end_ms)
+        self.assertAlmostEqual(
+            hit_result.hit_externality_ms,
+            barrier.end_ms - local_eligibility,
+        )
 
     def test_immediate_fission_splits_hit_and_miss_draft_work(self) -> None:
-        workload = Workload((request("hit"), request("miss", probability=0.0)))
+        workload = Workload((request("hit"), request("miss", cache_hit=0.0)))
         result = simulate(
             workload,
             test_profile(),
@@ -109,11 +203,11 @@ class SimulatorPolicyTests(unittest.TestCase):
         hit_result = next(item for item in result.requests if item.request_id == "hit")
         self.assertEqual(hit_result.hit_externality_ms, 0.0)
 
-    def test_saguaro_final_token_miss_still_holds_surviving_hits(self) -> None:
+    def test_saguaro_completed_miss_does_not_hold_surviving_hits(self) -> None:
         workload = Workload(
             (
                 request("hit", output=3),
-                request("final-miss", output=1, probability=0.0),
+                request("final-miss", output=1, cache_hit=0.0),
             )
         )
         result = simulate(
@@ -123,18 +217,23 @@ class SimulatorPolicyTests(unittest.TestCase):
             TableRNG(),
             max_batch_size=2,
         )
-        barrier = next(launch for launch in result.draft_launches if launch.barrier)
-        self.assertEqual(barrier.request_ids, ("final-miss",))
-        self.assertEqual(barrier.barrier_victim_ids, ("hit",))
+        self.assertFalse(any(launch.barrier for launch in result.draft_launches))
         hit_second_launch = next(
             launch
             for launch in result.target_launches[1:]
             if launch.request_ids == ("hit",)
         )
-        self.assertGreaterEqual(hit_second_launch.start_ms, barrier.end_ms)
+        first_target = result.target_launches[0]
+        first_precompute = next(
+            launch for launch in result.draft_launches if launch.precompute
+        )
+        self.assertEqual(
+            hit_second_launch.start_ms,
+            max(first_target.end_ms, first_precompute.end_ms),
+        )
 
     def test_spectre_keeps_recovery_as_one_token_padded_row(self) -> None:
-        workload = Workload((request("hit"), request("miss", probability=0.0)))
+        workload = Workload((request("hit"), request("miss", cache_hit=0.0)))
         result = simulate(
             workload,
             test_profile(recovery_ms=8.0),
@@ -159,7 +258,7 @@ class SimulatorPolicyTests(unittest.TestCase):
         self.assertGreater(summarize(result).padded_verifier_slots, 0)
 
     def test_immediate_miss_leaves_target_until_recovery(self) -> None:
-        workload = Workload((request("hit"), request("miss", probability=0.0)))
+        workload = Workload((request("hit"), request("miss", cache_hit=0.0)))
         result = simulate(
             workload,
             test_profile(recovery_ms=8.0),
@@ -181,7 +280,16 @@ class SimulatorPolicyTests(unittest.TestCase):
         self.assertEqual(result.padded_verifier_slots, 0)
 
     def test_spectre_can_issue_one_version_guarded_pad_only_launch(self) -> None:
-        workload = Workload((request("miss", output=3, probability=0.0),))
+        workload = Workload(
+            (
+                request(
+                    "miss",
+                    output=3,
+                    cache_hit=0.0,
+                    token_acceptance=0.0,
+                ),
+            )
+        )
         result = simulate(
             workload,
             test_profile(recovery_ms=8.0),
@@ -200,11 +308,51 @@ class SimulatorPolicyTests(unittest.TestCase):
         recoveries = [launch for launch in result.draft_launches if launch.recovery]
         self.assertGreaterEqual(len(recoveries), 2)
 
+    def test_spectre_padding_never_exceeds_batch_capacity(self) -> None:
+        workload = Workload(
+            tuple(
+                request(
+                    f"miss-{index}",
+                    output=5,
+                    cache_hit=0.0,
+                    token_acceptance=0.0,
+                )
+                for index in range(8)
+            )
+        )
+        result = simulate(
+            workload,
+            test_profile(recovery_ms=4.0),
+            SPECTREPaddedPolicy(),
+            TableRNG(),
+            max_batch_size=3,
+        )
+        self.assertEqual(result.policy_name, "spectre-parallel-padded")
+        self.assertTrue(
+            all(launch.effective_batch_size <= 3 for launch in result.target_launches)
+        )
+
+    def test_final_real_row_caps_slots_and_skips_known_useless_precompute(self) -> None:
+        result = simulate(
+            Workload((request("one", output=1, speculation=8),)),
+            HardwareProfile.linear(verifier_slot_ms=0.25),
+            ImmediateFissionPolicy(),
+            TableRNG(),
+            max_batch_size=1,
+        )
+        self.assertEqual(result.target_launches[0].verifier_slots, 1)
+        self.assertFalse(any(launch.precompute for launch in result.draft_launches))
+
     def test_target_timeline_progresses_while_draft_recovery_is_busy(self) -> None:
         workload = Workload(
             (
-                request("miss", output=2, probability=0.0),
-                request("later", arrival=1.1, output=1, probability=1.0),
+                request(
+                    "miss",
+                    output=2,
+                    cache_hit=0.0,
+                    token_acceptance=0.0,
+                ),
+                request("later", arrival=1.1, output=1, cache_hit=1.0),
             )
         )
         result = simulate(
@@ -221,7 +369,7 @@ class SimulatorPolicyTests(unittest.TestCase):
         self.assertLess(later_target.start_ms, recovery.end_ms)
 
     def test_ssd_precompute_overlaps_target_and_hit_consumes_cached_branch(self) -> None:
-        workload = Workload((request("hit", output=5, probability=1.0),))
+        workload = Workload((request("hit", output=5, cache_hit=1.0),))
         result = simulate(
             workload,
             test_profile(),
@@ -245,7 +393,7 @@ class SimulatorPolicyTests(unittest.TestCase):
             name="draft-bound",
         )
         result = simulate(
-            Workload((request("hit", output=3, probability=1.0),)),
+            Workload((request("hit", output=3, cache_hit=1.0),)),
             profile,
             ImmediateFissionPolicy(),
             TableRNG(),
@@ -309,19 +457,25 @@ class DeterminismAndMetricTests(unittest.TestCase):
     def test_policy_changes_do_not_change_rng_addressed_outcomes(self) -> None:
         workload = Workload(
             (
-                request("a", output=9, probability=0.5),
-                request("b", arrival=0.2, output=9, probability=0.5),
+                request("a", output=9, cache_hit=0.5, token_acceptance=0.5),
+                request(
+                    "b",
+                    arrival=0.2,
+                    output=9,
+                    cache_hit=0.5,
+                    token_acceptance=0.5,
+                ),
             )
         )
         values = {
-            ("a", 0): 0.1,
-            ("a", 1): 0.9,
-            ("a", 2): 0.2,
-            ("a", 3): 0.8,
-            ("b", 0): 0.7,
-            ("b", 1): 0.3,
-            ("b", 2): 0.6,
-            ("b", 3): 0.1,
+            ("a", 0, "cache-hit", 0): 0.1,
+            ("a", 1, "cache-hit", 0): 0.9,
+            ("a", 2, "cache-hit", 0): 0.2,
+            ("a", 3, "cache-hit", 0): 0.8,
+            ("b", 0, "cache-hit", 0): 0.7,
+            ("b", 1, "cache-hit", 0): 0.3,
+            ("b", 2, "cache-hit", 0): 0.6,
+            ("b", 3, "cache-hit", 0): 0.1,
         }
         rng_immediate = TableRNG(values)
         rng_fixed = TableRNG(values)
@@ -349,7 +503,10 @@ class DeterminismAndMetricTests(unittest.TestCase):
 
         self.assertEqual(traces(immediate), traces(fixed))
         self.assertTrue(
-            all(stream == "acceptance" and draw == 0 for _, _, stream, draw in rng_fixed.calls)
+            all(
+                stream in {"cache-hit", "token-acceptance"}
+                for _, _, stream, _ in rng_fixed.calls
+            )
         )
 
     def test_metrics_and_counterfactual_are_complete(self) -> None:
@@ -359,14 +516,14 @@ class DeterminismAndMetricTests(unittest.TestCase):
             workload,
             profile,
             SaguaroBarrierPolicy(),
-            TableRNG({("b", 0): 0.99}),
+            TableRNG({("b", 0, "cache-hit", 0): 0.99}),
             max_batch_size=2,
         )
         candidate = simulate(
             workload,
             profile,
             ImmediateFissionPolicy(),
-            TableRNG({("b", 0): 0.99}),
+            TableRNG({("b", 0, "cache-hit", 0): 0.99}),
             max_batch_size=2,
         )
         metrics = summarize(candidate)
@@ -376,9 +533,80 @@ class DeterminismAndMetricTests(unittest.TestCase):
         self.assertLessEqual(metrics.slo_attainment, 1.0)
         self.assertGreater(metrics.target_launches, 0)
         self.assertGreater(metrics.mean_batch, 0.0)
+        self.assertEqual(
+            metrics.cache_hits + metrics.cache_misses,
+            sum(launch.real_batch_size for launch in candidate.target_launches),
+        )
+        self.assertGreater(metrics.verifier_emitted_tokens, 0)
+        self.assertGreater(metrics.mean_verifier_tokens_per_round, 0.0)
         comparison = counterfactual_metrics(candidate, baseline)
         self.assertEqual(comparison.candidate.policy_name, "immediate-fission")
         self.assertEqual(comparison.baseline.policy_name, "saguaro-barrier")
+
+    def test_counterfactual_pairing_rejects_config_and_hardware_mismatch(self) -> None:
+        baseline_workload = Workload((request("a", output=2),), name="paired")
+        changed_workload = Workload(
+            (request("a", output=3),),
+            name="paired",
+        )
+        baseline = simulate(
+            baseline_workload,
+            test_profile(),
+            ImmediateFissionPolicy(),
+            TableRNG(),
+        )
+        changed = simulate(
+            changed_workload,
+            test_profile(),
+            ImmediateFissionPolicy(),
+            TableRNG(),
+        )
+        with self.assertRaisesRegex(ValueError, "workload configs"):
+            counterfactual_metrics(changed, baseline)
+
+        changed_hardware = simulate(
+            baseline_workload,
+            HardwareProfile.linear(name="different"),
+            ImmediateFissionPolicy(),
+            TableRNG(),
+        )
+        with self.assertRaisesRegex(ValueError, "hardware profile"):
+            counterfactual_metrics(changed_hardware, baseline)
+
+    def test_randomized_policy_matrix_is_live_and_capacity_safe(self) -> None:
+        policies = (
+            SaguaroBarrierPolicy(),
+            SPECTREPaddedPolicy(),
+            ImmediateFissionPolicy(),
+            FixedCoalescePolicy(coalesce_ms=0.3),
+            FissionSpecPolicy(max_wait_ms=0.6),
+        )
+        workload = Workload.homogeneous(
+            7,
+            arrival_interval_ms=0.17,
+            output_tokens=13,
+            speculation_length=4,
+            cache_hit_probability=0.55,
+            token_acceptance_probability=0.65,
+        )
+        for seed in range(8):
+            for policy in policies:
+                with self.subTest(seed=seed, policy=policy.name):
+                    result = simulate(
+                        workload,
+                        test_profile(recovery_ms=1.7),
+                        policy,
+                        CounterRNG(seed),
+                        max_batch_size=3,
+                        max_events=50_000,
+                    )
+                    self.assertEqual(len(result.requests), len(workload))
+                    self.assertTrue(
+                        all(
+                            launch.effective_batch_size <= 3
+                            for launch in result.target_launches
+                        )
+                    )
 
     def test_invalid_rng_value_fails_loudly(self) -> None:
         workload = Workload((request("a", output=1),))

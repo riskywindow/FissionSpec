@@ -23,17 +23,22 @@ def context(
     next_time: float | None = 0.1,
     next_count: int = 1,
     deadline: float = 1_000.0,
+    oldest: float | None = None,
+    future_deadline: float | None = 1_000.0,
+    next_slots: int | None = 1,
 ) -> DispatchContext:
     return DispatchContext(
         now_ms=now,
         ready_count=ready,
         capacity=capacity,
-        oldest_ready_ms=now,
+        oldest_ready_ms=now if oldest is None else oldest,
         earliest_deadline_ms=deadline,
         slots_per_row=1,
         profile=profile,
         next_ready_time_ms=next_time,
         next_ready_count=next_count,
+        earliest_future_deadline_ms=future_deadline,
+        next_slots_per_row=next_slots,
     )
 
 
@@ -47,6 +52,9 @@ class PolicySemanticsTests(unittest.TestCase):
     def test_policy_parser_supports_stable_and_short_names(self) -> None:
         self.assertIsInstance(policy_from_name("saguaro"), SaguaroBarrierPolicy)
         self.assertIsInstance(policy_from_name("spectre-padded"), SPECTREPaddedPolicy)
+        self.assertEqual(
+            policy_from_name("spectre").name, "spectre-parallel-padded"
+        )
         self.assertIsInstance(policy_from_name("fission"), ImmediateFissionPolicy)
         self.assertIsInstance(policy_from_name("horizon_2"), FissionSpecPolicy)
         with self.assertRaises(ValueError):
@@ -122,6 +130,53 @@ class HorizonTwoTests(unittest.TestCase):
             policy.dispatch_at(context(profile, ready=8, capacity=8)),
             0.0,
         )
+
+    def test_cumulative_wait_is_anchored_to_oldest_ready_row(self) -> None:
+        profile = HardwareProfile.linear(
+            target_overhead_ms=10.0,
+            target_per_row_ms=0.1,
+            verifier_slot_ms=0.0,
+        )
+        policy = FissionSpecPolicy(max_wait_ms=1.0)
+        # A newer arrival at t=.9 cannot reset the row that has waited since 0.
+        ctx = context(
+            profile,
+            now=0.9,
+            oldest=0.0,
+            next_time=1.1,
+            next_count=1,
+        )
+        self.assertEqual(policy.dispatch_at(ctx), 0.9)
+
+    def test_infeasible_fusion_dispatches_even_when_its_cost_is_lower(self) -> None:
+        profile = HardwareProfile.linear(
+            target_overhead_ms=1.0,
+            target_per_row_ms=0.0 + 0.1,
+            verifier_slot_ms=0.0,
+        )
+        policy = FissionSpecPolicy(max_wait_ms=1.0)
+        ctx = context(
+            profile,
+            next_time=0.1,
+            deadline=1.15,
+            future_deadline=100.0,
+        )
+        self.assertEqual(policy.dispatch_at(ctx), 0.0)
+
+    def test_feasible_fusion_overrides_infeasible_launch_plan(self) -> None:
+        profile = HardwareProfile.linear(
+            target_overhead_ms=10.0,
+            target_per_row_ms=0.1,
+            verifier_slot_ms=0.0,
+        )
+        policy = FissionSpecPolicy(max_wait_ms=1.0)
+        ctx = context(
+            profile,
+            next_time=0.1,
+            deadline=100.0,
+            future_deadline=10.5,
+        )
+        self.assertEqual(policy.dispatch_at(ctx), 0.1)
         self.assertEqual(
             policy.dispatch_at(context(profile, next_time=0.1, deadline=1.0)),
             0.0,
