@@ -97,9 +97,12 @@ The symbolic KV ledger models committed pages and outcome-specific provisional
 branches. A partial committed tail is copy-on-write; only the selected,
 target-verified prefix can replace it. Sibling branches abort idempotently, and
 generational page handles reject stale releases (the allocator equivalent of
-the ABA problem). The count-level simulator does not execute token IDs, logits,
-or rejection sampling, so end-to-end distribution preservation remains an
-engine-integration acceptance gate.
+the ABA problem). The count-level simulator does not execute token IDs or
+logits. The separate `fissionspec.semantics` oracle executes exact rational
+rejection sampling, proves finite-model distribution equality by exhaustive
+enumeration, and checks rebatching-invariant committed-state digests.
+Real-model floating-point and production-kernel equivalence remain
+engine-integration acceptance gates.
 
 ## Runtime integration boundary
 

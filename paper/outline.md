@@ -9,12 +9,12 @@ outcome misses create a new systems externality: a miss can either stall the
 whole cohort or occupy a padded target row while it recovers. We introduce
 FissionSpec, which makes each outcome lookup independently schedulable, removes
 recovering misses from target batches, and re-fuses compatible ready requests
-with a bounded model-predictive controller. A versioned provisional-KV protocol
-and per-request counter RNG provide testable prerequisites for preserving
-target-distribution semantics across reordering; end-to-end sampling
-equivalence is not established by the count-level simulator. [Replace this
-sentence with measured GPU results only after the SGLang/vLLM integration is
-evaluated.]
+with a bounded model-predictive controller. An exact rational CPU oracle proves
+finite-model speculative-sampling equality under rebatching, while a versioned
+provisional-KV protocol and per-request counter RNG test the serving substrate.
+Real-model numerical equivalence and performance remain production-engine
+obligations. [Replace this sentence with measured GPU results only after the
+SGLang/vLLM integration is evaluated.]
 
 ## 1. Problem
 
@@ -91,9 +91,9 @@ orderings, or wait durations.
 
 ## 4. Correctness obligations
 
-These are production obligations. The artifact exercises the versioning, page,
-and RNG prerequisites independently; only an engine integration can close the
-token-level equivalence obligation.
+The exact CPU oracle closes the algorithmic token-distribution obligation for
+finite rational autoregressive models. The following remain production
+obligations because real kernels add floating-point and block-table behavior.
 
 - Only target-verified tokens become committed target state.
 - `(request, round, version)` totally orders state mutation per request.

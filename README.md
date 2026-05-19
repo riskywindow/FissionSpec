@@ -21,11 +21,15 @@ This repository is an executable research artifact, not a wrapper around an
 agent framework. It contains:
 
 - a dependency-free, deterministic discrete-event simulator for online SSD;
+- an exact rational token-level speculative-sampling oracle for tiny CPU models;
 - a Saguaro barrier baseline and a labeled SPECTRE parallel-mode component;
 - immediate-fission, fixed-coalescing, and horizon-2 FissionSpec policies;
 - an exact restricted small-trace binary-coalescing oracle;
 - a versioned copy-on-write KV transaction ledger with ABA-safe page handles;
+- a composed coordinator with canonical crash snapshots and injected-fault tests;
 - per-request counter-based randomness for schedule-independent experiments;
+- Poisson, exact MMPP, Pareto, and split-aware hash-linked replay workloads;
+- paired cluster inference, sequential stopping, and power-planning primitives;
 - dependency-free Rust controller/allocator primitives over flattened work units;
 - a calibration format, experiment harness, theory checks, and paper plan; and
 - a narrow integration contract for production PagedAttention engines.
@@ -136,11 +140,13 @@ Two components provide the prerequisites for safe engine reordering:
 2. every stochastic draw is keyed by logical request/round coordinates rather
    than global execution order.
 
-The count-level simulator does not sample token IDs or run rejection sampling;
-distribution preservation is therefore an integration acceptance gate, not a
-result claimed by this laptop model. See
-[docs/architecture.md](docs/architecture.md) for the state machine, controller
-equations, and engine boundary.
+The count-level performance simulator does not sample token IDs. A separate
+exact CPU oracle executes real speculative rejection sampling and exhaustively
+matches the target distribution for tiny rational autoregressive models.
+Production-kernel numerical parity remains an integration acceptance gate. See
+[docs/architecture.md](docs/architecture.md) for the state machine and engine
+boundary, and [docs/token_semantics.md](docs/token_semantics.md) for the exact
+semantic contract.
 
 ## Artifact status
 
@@ -162,7 +168,7 @@ Conference-grade claims still require:
 - latency calibration from SGLang or vLLM kernels;
 - an implementation that physically omits miss rows from CUDA-graph inputs;
 - matched-resource H100/B200 experiments against Saguaro and SPECTRE; and
-- greedy-equivalence plus distributional tests on real model outputs.
+- greedy-equivalence plus distributional tests on real model/kernel outputs.
 
 That distinction is deliberate: the repository is designed to make the next
 GPU experiment falsifiable rather than manufacture a benchmark from hardware
@@ -177,9 +183,16 @@ experiments/                matched-seed sweeps and artifact tables
 configs/                    synthetic and calibrated latency profiles
 integrations/               SGLang/vLLM production-engine contracts
 tests/                      unit, invariant, model, and adversarial tests
-docs/                       architecture and dated novelty analysis
-paper/                      manuscript outline and evaluation checklist
+docs/                       architecture, semantics, theory, traces, novelty
+paper/                      manuscript plan and GPU pre-registration
 ```
+
+The finite CPU-exhaustion boundary is
+[docs/cpu_completion.md](docs/cpu_completion.md). Full event artifacts and
+replay inputs are defined in [docs/trace_schema.md](docs/trace_schema.md), exact
+analytical results in [docs/theory.md](docs/theory.md), and the spend-gated
+accelerator handoff in
+[paper/gpu_preregistration.md](paper/gpu_preregistration.md).
 
 ## Research path
 
