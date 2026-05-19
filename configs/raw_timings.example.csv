@@ -1,0 +1,9 @@
+component,batch_rows,latency_ms,verifier_slots
+target,1,2.118,1
+target,1,2.172,4
+target,4,2.872,4
+target,4,3.088,16
+draft,1,0.550,0
+draft,4,0.780,0
+recovery,1,1.250,0
+recovery,4,1.700,0

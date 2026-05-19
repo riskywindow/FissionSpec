@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import unittest
 from collections import defaultdict
 
@@ -29,9 +30,12 @@ class TableRNG:
         self.default = default
         self.calls: list[tuple[str, int, str, int]] = []
 
-    def uniform(
-        self, request_id: str, round_id: int, stream: str, draw: int = 0
-    ) -> float:
+    @property
+    def provenance(self) -> str:
+        payload = repr((sorted(self.values.items()), self.default)).encode()
+        return f"table-rng-v1:{hashlib.sha256(payload).hexdigest()}"
+
+    def uniform(self, request_id: str, round_id: int, stream: str, draw: int = 0) -> float:
         self.calls.append((request_id, round_id, stream, draw))
         return self.values.get((request_id, round_id, stream, draw), self.default)
 
@@ -70,6 +74,12 @@ def request(
 
 
 class SimulatorPolicyTests(unittest.TestCase):
+    def test_workload_rejects_bool_time_and_non_string_identity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "arrival_ms"):
+            request("bad-time", arrival=True)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "request_id"):
+            request(7)  # type: ignore[arg-type]
+
     def test_cache_outcome_is_independent_of_token_productivity(self) -> None:
         workload = Workload(
             (
@@ -113,9 +123,7 @@ class SimulatorPolicyTests(unittest.TestCase):
             max_batch_size=2,
         ).target_launches[0]
         self.assertEqual(dict(first.accepted_tokens), {"forced-hit": 2, "forced-miss": 2})
-        self.assertEqual(
-            dict(first.productive_tokens), {"forced-hit": 3, "forced-miss": 3}
-        )
+        self.assertEqual(dict(first.productive_tokens), {"forced-hit": 3, "forced-miss": 3})
         self.assertEqual(dict(first.outcomes)["forced-hit"], Outcome.HIT)
         self.assertEqual(dict(first.outcomes)["forced-miss"], Outcome.MISS)
 
@@ -149,16 +157,31 @@ class SimulatorPolicyTests(unittest.TestCase):
         accept_draws = [
             draw
             for request_id, round_id, stream, draw in rng.calls
-            if request_id == "accept"
-            and round_id == 0
-            and stream == "token-acceptance"
+            if request_id == "accept" and round_id == 0 and stream == "token-acceptance"
         ]
         self.assertEqual(accept_draws, [0, 1, 2])
 
-    def test_saguaro_miss_routes_entire_surviving_cohort_to_barrier(self) -> None:
-        workload = Workload(
-            (request("hit", output=3), request("miss", cache_hit=0.0))
+    def test_terminal_round_does_not_invent_next_continuation_lookup(self) -> None:
+        rng = TableRNG()
+        result = simulate(
+            Workload((request("terminal", output=1, speculation=4),)),
+            test_profile(),
+            ImmediateFissionPolicy(),
+            rng,
+            max_batch_size=1,
         )
+        self.assertEqual(result.target_launches[0].outcomes, (("terminal", Outcome.TERMINAL),))
+        self.assertFalse(any(stream == "cache-hit" for _, _, stream, _ in rng.calls))
+        metrics = summarize(result)
+        self.assertEqual(metrics.cache_hits, 0)
+        self.assertEqual(metrics.cache_misses, 0)
+        self.assertEqual(metrics.verifier_rounds, 1)
+        self.assertEqual(metrics.mean_verifier_tokens_per_round, 1.0)
+        self.assertEqual(metrics.request_tbt_slo_attainment, 1.0)
+        self.assertGreater(metrics.tbt_request_goodput_tokens_per_s, 0.0)
+
+    def test_saguaro_miss_routes_entire_surviving_cohort_to_barrier(self) -> None:
+        workload = Workload((request("hit", output=3), request("miss", cache_hit=0.0)))
         result = simulate(
             workload,
             test_profile(),
@@ -178,7 +201,7 @@ class SimulatorPolicyTests(unittest.TestCase):
         hit_result = next(item for item in result.requests if item.request_id == "hit")
         local_eligibility = max(first_target.end_ms, first_draft.end_ms)
         self.assertAlmostEqual(
-            hit_result.hit_externality_ms,
+            hit_result.direct_hit_delay_ms,
             barrier.end_ms - local_eligibility,
         )
 
@@ -201,7 +224,7 @@ class SimulatorPolicyTests(unittest.TestCase):
         self.assertTrue(miss_recovery.recovery)
         self.assertTrue(all(not launch.padded_request_ids for launch in result.target_launches))
         hit_result = next(item for item in result.requests if item.request_id == "hit")
-        self.assertEqual(hit_result.hit_externality_ms, 0.0)
+        self.assertEqual(hit_result.direct_hit_delay_ms, 0.0)
 
     def test_saguaro_completed_miss_does_not_hold_surviving_hits(self) -> None:
         workload = Workload(
@@ -219,14 +242,10 @@ class SimulatorPolicyTests(unittest.TestCase):
         )
         self.assertFalse(any(launch.barrier for launch in result.draft_launches))
         hit_second_launch = next(
-            launch
-            for launch in result.target_launches[1:]
-            if launch.request_ids == ("hit",)
+            launch for launch in result.target_launches[1:] if launch.request_ids == ("hit",)
         )
         first_target = result.target_launches[0]
-        first_precompute = next(
-            launch for launch in result.draft_launches if launch.precompute
-        )
+        first_precompute = next(launch for launch in result.draft_launches if launch.precompute)
         self.assertEqual(
             hit_second_launch.start_ms,
             max(first_target.end_ms, first_precompute.end_ms),
@@ -241,9 +260,7 @@ class SimulatorPolicyTests(unittest.TestCase):
             TableRNG(),
             max_batch_size=2,
         )
-        padded_launches = [
-            launch for launch in result.target_launches if launch.padded_request_ids
-        ]
+        padded_launches = [launch for launch in result.target_launches if launch.padded_request_ids]
         self.assertTrue(padded_launches)
         first_padded = padded_launches[0]
         self.assertEqual(first_padded.padded_request_ids, ("miss",))
@@ -271,11 +288,7 @@ class SimulatorPolicyTests(unittest.TestCase):
             for launch in result.draft_launches
             if launch.recovery and launch.request_ids == ("miss",)
         )
-        miss_targets = [
-            launch
-            for launch in result.target_launches
-            if "miss" in launch.request_ids
-        ]
+        miss_targets = [launch for launch in result.target_launches if "miss" in launch.request_ids]
         self.assertGreaterEqual(miss_targets[1].start_ms, recovery.end_ms)
         self.assertEqual(result.padded_verifier_slots, 0)
 
@@ -328,9 +341,31 @@ class SimulatorPolicyTests(unittest.TestCase):
             max_batch_size=3,
         )
         self.assertEqual(result.policy_name, "spectre-parallel-padded")
-        self.assertTrue(
-            all(launch.effective_batch_size <= 3 for launch in result.target_launches)
+        self.assertTrue(all(launch.effective_batch_size <= 3 for launch in result.target_launches))
+
+    def test_spectre_padding_never_displaces_productive_ready_rows(self) -> None:
+        workload = Workload(
+            (
+                request(
+                    "miss",
+                    output=4,
+                    cache_hit=0.0,
+                    token_acceptance=0.0,
+                ),
+                request("later-a", arrival=0.9, output=1),
+                request("later-b", arrival=0.9, output=1),
+            )
         )
+        result = simulate(
+            workload,
+            test_profile(recovery_ms=8.0),
+            SPECTREPaddedPolicy(),
+            TableRNG(),
+            max_batch_size=2,
+        )
+        launch = next(item for item in result.target_launches if "later-a" in item.request_ids)
+        self.assertEqual(launch.request_ids, ("later-a", "later-b"))
+        self.assertEqual(launch.padded_request_ids, ())
 
     def test_final_real_row_caps_slots_and_skips_known_useless_precompute(self) -> None:
         result = simulate(
@@ -342,6 +377,32 @@ class SimulatorPolicyTests(unittest.TestCase):
         )
         self.assertEqual(result.target_launches[0].verifier_slots, 1)
         self.assertFalse(any(launch.precompute for launch in result.draft_launches))
+
+    def test_deadline_admission_prevents_fifo_head_of_line_inversion(self) -> None:
+        loose = RequestConfig(
+            request_id="loose-first",
+            arrival_ms=0.0,
+            output_tokens=1,
+            speculation_length=1,
+            deadline_ms=100.0,
+        )
+        urgent = RequestConfig(
+            request_id="urgent-second",
+            arrival_ms=0.0,
+            output_tokens=1,
+            speculation_length=1,
+            deadline_ms=1.1,
+        )
+        result = simulate(
+            Workload((loose, urgent)),
+            test_profile(),
+            ImmediateFissionPolicy(),
+            TableRNG(),
+            max_batch_size=1,
+        )
+        self.assertEqual(result.target_launches[0].request_ids, ("urgent-second",))
+        urgent_result = next(item for item in result.requests if item.request_id == "urgent-second")
+        self.assertLessEqual(urgent_result.completion_ms, urgent.deadline_ms)
 
     def test_target_timeline_progresses_while_draft_recovery_is_busy(self) -> None:
         workload = Workload(
@@ -429,10 +490,8 @@ class SimulatorPolicyTests(unittest.TestCase):
         self.assertEqual(len(fixed.target_launches), 1)
         self.assertEqual(len(immediate.target_launches), 2)
 
-    def test_horizon_two_controller_coalesces_when_flow_cost_improves(self) -> None:
-        workload = Workload(
-            (request("a", output=1), request("b", arrival=0.1, output=1))
-        )
+    def test_horizon_two_does_not_forecast_external_arrivals(self) -> None:
+        workload = Workload((request("a", output=1), request("b", arrival=0.1, output=1)))
         profile = HardwareProfile.linear(
             target_overhead_ms=10.0,
             target_per_row_ms=0.1,
@@ -449,8 +508,157 @@ class SimulatorPolicyTests(unittest.TestCase):
             TableRNG(),
             max_batch_size=4,
         )
-        self.assertEqual(len(result.target_launches), 1)
-        self.assertEqual(result.target_launches[0].start_ms, 0.1)
+        self.assertEqual(len(result.target_launches), 2)
+        self.assertEqual(result.target_launches[0].start_ms, 0.0)
+        self.assertEqual(result.target_launches[0].request_ids, ("a",))
+
+    def test_horizon_two_coalesces_with_known_recovery_eta(self) -> None:
+        workload = Workload(
+            (
+                request(
+                    "hit",
+                    output=2,
+                    speculation=1,
+                    cache_hit=1.0,
+                    token_acceptance=0.0,
+                ),
+                request(
+                    "miss",
+                    output=2,
+                    speculation=1,
+                    cache_hit=0.0,
+                    token_acceptance=0.0,
+                ),
+            )
+        )
+        profile = HardwareProfile.linear(
+            target_overhead_ms=10.0,
+            target_per_row_ms=0.1,
+            draft_overhead_ms=0.01,
+            draft_per_row_ms=0.01,
+            recovery_overhead_ms=0.1,
+            recovery_per_row_ms=0.01,
+            verifier_slot_ms=0.0,
+        )
+        result = simulate(
+            workload,
+            profile,
+            FissionSpecPolicy(max_wait_ms=1.0),
+            TableRNG(),
+            max_batch_size=4,
+        )
+        recovery = next(launch for launch in result.draft_launches if launch.recovery)
+        fused = result.target_launches[1]
+        self.assertEqual(fused.start_ms, recovery.end_ms)
+        self.assertEqual(fused.request_ids, ("hit", "miss"))
+
+    def test_horizon_two_forecast_matches_edf_heterogeneous_overflow(self) -> None:
+        workload = Workload(
+            (
+                RequestConfig(
+                    "a-small",
+                    output_tokens=3,
+                    speculation_length=1,
+                    cache_hit_probability=0.0,
+                    token_acceptance_probability=0.0,
+                    deadline_ms=50.0,
+                ),
+                RequestConfig(
+                    "b-medium",
+                    output_tokens=9,
+                    speculation_length=8,
+                    cache_hit_probability=0.0,
+                    token_acceptance_probability=0.0,
+                    deadline_ms=50.0,
+                ),
+                RequestConfig(
+                    "c-large",
+                    output_tokens=17,
+                    speculation_length=16,
+                    cache_hit_probability=0.0,
+                    token_acceptance_probability=0.0,
+                    deadline_ms=50.0,
+                ),
+                RequestConfig(
+                    "loose-current",
+                    arrival_ms=0.381,
+                    output_tokens=1,
+                    speculation_length=1,
+                    deadline_ms=100.0,
+                ),
+            )
+        )
+        profile = HardwareProfile.linear(
+            target_overhead_ms=0.1,
+            target_per_row_ms=0.01,
+            draft_overhead_ms=0.0,
+            draft_per_row_ms=0.001,
+            recovery_overhead_ms=0.001,
+            recovery_per_row_ms=0.001,
+            verifier_slot_ms=0.01,
+            name="edf-overflow-regression",
+        )
+        result = simulate(
+            workload,
+            profile,
+            FissionSpecPolicy(max_wait_ms=2.0),
+            CounterRNG(0),
+            max_batch_size=3,
+        )
+        recovery = next(launch for launch in result.draft_launches if launch.recovery)
+        current_launch = result.target_launches[1]
+        # At recovery, EDF would place all three earlier-deadline rows ahead of
+        # loose-current, including their heterogeneous widths (1, 8, 16). The
+        # exact forecast therefore dispatches loose-current before that wake.
+        self.assertEqual(current_launch.request_ids, ("loose-current",))
+        self.assertEqual(current_launch.start_ms, 0.381)
+        self.assertLess(current_launch.start_ms, recovery.end_ms)
+
+    def test_horizon_two_protects_rolling_next_token_slo(self) -> None:
+        workload = Workload(
+            (
+                request(
+                    "urgent-hit",
+                    output=100,
+                    speculation=1,
+                    cache_hit=1.0,
+                    token_acceptance=0.0,
+                    slo=1.2,
+                ),
+                request(
+                    "recovering-miss",
+                    output=2,
+                    speculation=1,
+                    cache_hit=0.0,
+                    token_acceptance=0.0,
+                ),
+            )
+        )
+        profile = HardwareProfile.linear(
+            target_overhead_ms=1.0,
+            target_per_row_ms=0.01,
+            draft_overhead_ms=0.01,
+            draft_per_row_ms=0.01,
+            recovery_overhead_ms=0.5,
+            recovery_per_row_ms=0.01,
+            verifier_slot_ms=0.0,
+        )
+        result = simulate(
+            workload,
+            profile,
+            FissionSpecPolicy(max_wait_ms=2.0),
+            TableRNG(),
+            max_batch_size=4,
+        )
+        recovery = next(launch for launch in result.draft_launches if launch.recovery)
+        first = result.target_launches[0]
+        second = result.target_launches[1]
+        # After the first verifier emits urgent-hit's first token, launching it
+        # alone meets the rolling 1.2 ms TBT bound. Waiting for the known miss
+        # recovery and fusing would not, despite a loose 120 ms final budget.
+        self.assertLess(second.start_ms, recovery.end_ms)
+        self.assertEqual(second.start_ms, first.end_ms)
+        self.assertEqual(second.request_ids, ("urgent-hit",))
 
 
 class DeterminismAndMetricTests(unittest.TestCase):
@@ -503,10 +711,7 @@ class DeterminismAndMetricTests(unittest.TestCase):
 
         self.assertEqual(traces(immediate), traces(fixed))
         self.assertTrue(
-            all(
-                stream in {"cache-hit", "token-acceptance"}
-                for _, _, stream, _ in rng_fixed.calls
-            )
+            all(stream in {"cache-hit", "token-acceptance"} for _, _, stream, _ in rng_fixed.calls)
         )
 
     def test_metrics_and_counterfactual_are_complete(self) -> None:
@@ -529,12 +734,19 @@ class DeterminismAndMetricTests(unittest.TestCase):
         metrics = summarize(candidate)
         self.assertGreater(metrics.throughput_tokens_per_s, 0.0)
         self.assertGreaterEqual(metrics.p99_tbt_ms, metrics.p50_tbt_ms)
-        self.assertGreaterEqual(metrics.slo_attainment, 0.0)
-        self.assertLessEqual(metrics.slo_attainment, 1.0)
+        self.assertGreaterEqual(metrics.token_gap_slo_attainment, 0.0)
+        self.assertLessEqual(metrics.token_gap_slo_attainment, 1.0)
+        self.assertGreaterEqual(metrics.request_tbt_slo_attainment, 0.0)
+        self.assertLessEqual(metrics.request_tbt_slo_attainment, 1.0)
+        self.assertGreaterEqual(metrics.tbt_request_goodput_tokens_per_s, 0.0)
         self.assertGreater(metrics.target_launches, 0)
         self.assertGreater(metrics.mean_batch, 0.0)
-        self.assertEqual(
+        self.assertLess(
             metrics.cache_hits + metrics.cache_misses,
+            metrics.verifier_rounds,
+        )
+        self.assertEqual(
+            metrics.verifier_rounds,
             sum(launch.real_batch_size for launch in candidate.target_launches),
         )
         self.assertGreater(metrics.verifier_emitted_tokens, 0)
@@ -573,6 +785,15 @@ class DeterminismAndMetricTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hardware profile"):
             counterfactual_metrics(changed_hardware, baseline)
 
+        changed_rng = simulate(
+            baseline_workload,
+            test_profile(),
+            ImmediateFissionPolicy(),
+            TableRNG(default=0.25),
+        )
+        with self.assertRaisesRegex(ValueError, "RNG provenance"):
+            counterfactual_metrics(changed_rng, baseline)
+
     def test_randomized_policy_matrix_is_live_and_capacity_safe(self) -> None:
         policies = (
             SaguaroBarrierPolicy(),
@@ -602,14 +823,11 @@ class DeterminismAndMetricTests(unittest.TestCase):
                     )
                     self.assertEqual(len(result.requests), len(workload))
                     self.assertTrue(
-                        all(
-                            launch.effective_batch_size <= 3
-                            for launch in result.target_launches
-                        )
+                        all(launch.effective_batch_size <= 3 for launch in result.target_launches)
                     )
 
     def test_invalid_rng_value_fails_loudly(self) -> None:
-        workload = Workload((request("a", output=1),))
+        workload = Workload((request("a", output=2, speculation=2),))
         with self.assertRaises(SimulationError):
             simulate(
                 workload,

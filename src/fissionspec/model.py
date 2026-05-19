@@ -13,10 +13,11 @@ if TYPE_CHECKING:
 
 
 class Outcome(StrEnum):
-    """Independent SSD next-continuation cache lookup result."""
+    """Next-continuation state after one target verification."""
 
     HIT = "hit"
     MISS = "miss"
+    TERMINAL = "terminal"
 
 
 class RequestPhase(StrEnum):
@@ -50,7 +51,7 @@ class RequestState:
     misses: int = 0
     accepted_draft_tokens: int = 0
     verifier_emitted_tokens: int = 0
-    hit_externality_ms: float = 0.0
+    direct_hit_delay_ms: float = 0.0
     recovery_epoch: int = 0
     spectre_padding_eligible: bool = False
     waiting_precompute_round: int | None = None
@@ -58,6 +59,21 @@ class RequestState:
     @property
     def remaining_tokens(self) -> int:
         return self.output_tokens - self.generated_tokens
+
+    @property
+    def next_token_deadline_ms(self) -> float:
+        """Return the rolling TBT deadline capped by the final deadline.
+
+        Before the first emitted token only the explicit/derived final bound
+        applies because this steady-state model reports TBT but excludes TTFT.
+        """
+
+        if not self.token_times_ms:
+            return self.absolute_deadline_ms
+        return min(
+            self.absolute_deadline_ms,
+            self.token_times_ms[-1] + self.tbt_slo_ms,
+        )
 
     def emit(self, count: int, at_ms: float) -> int:
         """Emit at most the remaining token count and return what was emitted."""
@@ -88,7 +104,7 @@ class RequestResult:
     accepted_draft_tokens: int
     verifier_emitted_tokens: int
     tbt_slo_ms: float
-    hit_externality_ms: float
+    direct_hit_delay_ms: float
 
     @property
     def latency_ms(self) -> float:
@@ -98,9 +114,7 @@ class RequestResult:
     def inter_token_times_ms(self) -> tuple[float, ...]:
         return tuple(
             right - left
-            for left, right in zip(
-                self.token_times_ms, self.token_times_ms[1:], strict=False
-            )
+            for left, right in zip(self.token_times_ms, self.token_times_ms[1:], strict=False)
         )
 
 
@@ -161,6 +175,7 @@ class SimulationResult:
     policy_name: str
     hardware_name: str
     workload_name: str
+    rng_provenance: str
     profile: HardwareProfile
     workload: Workload
     requests: tuple[RequestResult, ...]

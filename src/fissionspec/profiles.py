@@ -24,11 +24,7 @@ class LatencyCurve:
         previous_batch = 0
         previous_latency = -1.0
         for batch, latency in self.points:
-            if (
-                isinstance(batch, bool)
-                or not isinstance(batch, int)
-                or batch <= previous_batch
-            ):
+            if isinstance(batch, bool) or not isinstance(batch, int) or batch <= previous_batch:
                 raise ValueError("curve batch sizes must be strictly increasing")
             if not math.isfinite(latency) or latency <= 0.0:
                 raise ValueError("curve latencies must be finite and positive")
@@ -52,19 +48,13 @@ class LatencyCurve:
     def latency_ms(self, batch_rows: int) -> float:
         """Interpolate or extrapolate latency at ``batch_rows``."""
 
-        if (
-            isinstance(batch_rows, bool)
-            or not isinstance(batch_rows, int)
-            or batch_rows <= 0
-        ):
+        if isinstance(batch_rows, bool) or not isinstance(batch_rows, int) or batch_rows <= 0:
             raise ValueError("batch_rows must be a positive integer")
         first_x, first_y = self.points[0]
         if batch_rows <= first_x:
             return first_y * batch_rows / first_x
 
-        for (left_x, left_y), (right_x, right_y) in zip(
-            self.points, self.points[1:], strict=False
-        ):
+        for (left_x, left_y), (right_x, right_y) in zip(self.points, self.points[1:], strict=False):
             if batch_rows <= right_x:
                 fraction = (batch_rows - left_x) / (right_x - left_x)
                 return left_y + fraction * (right_y - left_y)
@@ -96,16 +86,18 @@ class HardwareProfile:
     """Latency curves for physically separate target and draft engines.
 
     Curves capture row-dependent kernel efficiency.  ``verifier_slot_ms``
-    captures the smaller token-axis cost, including slots wasted by padded
-    mixed batches.  Draft recovery has a separate curve because cache repair
-    is normally more expensive than preparing the next speculative block.
+    captures the smaller token-axis cost. Callers pass the physical slot count
+    seen by the measured backend: the sum of row widths for a packed kernel,
+    or graph-bucket/rectangular slots when padding is material. Draft recovery
+    has a separate curve because cache repair is normally more expensive than
+    preparing the next speculative block.
     """
 
     target_curve: LatencyCurve = field(default_factory=_default_target_curve)
     draft_curve: LatencyCurve = field(default_factory=_default_draft_curve)
     recovery_curve: LatencyCurve = field(default_factory=_default_recovery_curve)
     verifier_slot_ms: float = 0.018
-    name: str = "reference"
+    name: str = "synthetic-reference-not-a-gpu-measurement"
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.verifier_slot_ms) or self.verifier_slot_ms < 0.0:
@@ -129,15 +121,13 @@ class HardwareProfile:
         return cls(
             target_curve=LatencyCurve.linear(target_overhead_ms, target_per_row_ms),
             draft_curve=LatencyCurve.linear(draft_overhead_ms, draft_per_row_ms),
-            recovery_curve=LatencyCurve.linear(
-                recovery_overhead_ms, recovery_per_row_ms
-            ),
+            recovery_curve=LatencyCurve.linear(recovery_overhead_ms, recovery_per_row_ms),
             verifier_slot_ms=verifier_slot_ms,
             name=name,
         )
 
     def target_latency_ms(self, batch_rows: int, verifier_slots: int) -> float:
-        """Return target launch duration for the rectangular verifier batch."""
+        """Return target launch duration for rows and measured physical slots."""
 
         if (
             isinstance(verifier_slots, bool)

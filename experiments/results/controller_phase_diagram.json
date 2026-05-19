@@ -147,7 +147,8 @@
   "comparison": {
     "baseline": "immediate-fission",
     "candidate": "fissionspec-horizon-2",
-    "interpretation": "re-fuse means the real horizon-2 policy waits for the known next readiness ETA while the real immediate-fission policy launches now"
+    "interpretation": "re-fuse means the real horizon-2 policy waits for the known next readiness ETA while the real immediate-fission policy launches now",
+    "wake_admission": "global rolling EDF over current and next-ready rows; current rows win exact deadline ties because they became ready earlier"
   },
   "controller": {
     "lookahead": "next readiness event only",

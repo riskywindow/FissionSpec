@@ -36,6 +36,22 @@ POLICIES: Final = (
     "fissionspec-horizon-2",
 )
 WORKLOAD_KINDS: Final = ("synchronized-cohort", "poisson", "bursty")
+IMPLEMENTATION_FILES: Final = (
+    "experiments/run_synthetic_sweep.py",
+    "src/fissionspec/metrics.py",
+    "src/fissionspec/model.py",
+    "src/fissionspec/policies.py",
+    "src/fissionspec/profiles.py",
+    "src/fissionspec/rng.py",
+    "src/fissionspec/simulator.py",
+    "src/fissionspec/workload.py",
+)
+
+
+def synthetic_profile() -> HardwareProfile:
+    """Return the immutable model surface used by the checked-in artifact."""
+
+    return HardwareProfile(name="synthetic-reference-not-gpu")
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +191,7 @@ class ExperimentRow:
     observed_cache_misses: int
     observed_cache_hit_rate: float
     accepted_draft_tokens: int
+    verifier_rounds: int
     mean_verifier_tokens_per_round: float
     requests: int
     output_tokens: int
@@ -183,10 +200,12 @@ class ExperimentRow:
     p95_tbt_ms: float
     p99_tbt_ms: float
     throughput_tokens_per_s: float
-    slo_attainment: float
+    token_gap_slo_attainment: float
+    request_tbt_slo_attainment: float
+    tbt_request_goodput_tokens_per_s: float
     padded_verifier_slots: int
-    hit_externality_ms: float
-    total_hit_externality_ms: float
+    direct_hit_delay_ms: float
+    total_direct_hit_delay_ms: float
     target_launches: int
     draft_launches: int
     mean_batch: float
@@ -210,6 +229,7 @@ class ExperimentRow:
             observed_cache_misses=metrics.cache_misses,
             observed_cache_hit_rate=metrics.observed_cache_hit_rate,
             accepted_draft_tokens=metrics.accepted_draft_tokens,
+            verifier_rounds=metrics.verifier_rounds,
             mean_verifier_tokens_per_round=metrics.mean_verifier_tokens_per_round,
             requests=metrics.requests,
             output_tokens=metrics.output_tokens,
@@ -218,10 +238,12 @@ class ExperimentRow:
             p95_tbt_ms=metrics.p95_tbt_ms,
             p99_tbt_ms=metrics.p99_tbt_ms,
             throughput_tokens_per_s=metrics.throughput_tokens_per_s,
-            slo_attainment=metrics.slo_attainment,
+            token_gap_slo_attainment=metrics.token_gap_slo_attainment,
+            request_tbt_slo_attainment=metrics.request_tbt_slo_attainment,
+            tbt_request_goodput_tokens_per_s=(metrics.tbt_request_goodput_tokens_per_s),
             padded_verifier_slots=metrics.padded_verifier_slots,
-            hit_externality_ms=metrics.hit_externality_ms,
-            total_hit_externality_ms=metrics.total_hit_externality_ms,
+            direct_hit_delay_ms=metrics.direct_hit_delay_ms,
+            total_direct_hit_delay_ms=metrics.total_direct_hit_delay_ms,
             target_launches=metrics.target_launches,
             draft_launches=metrics.draft_launches,
             mean_batch=metrics.mean_batch,
@@ -241,6 +263,7 @@ class ExperimentRow:
             "observed_cache_misses": self.observed_cache_misses,
             "observed_cache_hit_rate": self.observed_cache_hit_rate,
             "accepted_draft_tokens": self.accepted_draft_tokens,
+            "verifier_rounds": self.verifier_rounds,
             "mean_verifier_tokens_per_round": self.mean_verifier_tokens_per_round,
             "requests": self.requests,
             "output_tokens": self.output_tokens,
@@ -249,10 +272,12 @@ class ExperimentRow:
             "p95_tbt_ms": self.p95_tbt_ms,
             "p99_tbt_ms": self.p99_tbt_ms,
             "throughput_tokens_per_s": self.throughput_tokens_per_s,
-            "slo_attainment": self.slo_attainment,
+            "token_gap_slo_attainment": self.token_gap_slo_attainment,
+            "request_tbt_slo_attainment": self.request_tbt_slo_attainment,
+            "tbt_request_goodput_tokens_per_s": self.tbt_request_goodput_tokens_per_s,
             "padded_verifier_slots": self.padded_verifier_slots,
-            "hit_externality_ms": self.hit_externality_ms,
-            "total_hit_externality_ms": self.total_hit_externality_ms,
+            "direct_hit_delay_ms": self.direct_hit_delay_ms,
+            "total_direct_hit_delay_ms": self.total_direct_hit_delay_ms,
             "target_launches": self.target_launches,
             "draft_launches": self.draft_launches,
             "mean_batch": self.mean_batch,
@@ -275,9 +300,11 @@ class AggregateRow:
     throughput_tokens_per_s: float
     p95_tbt_ms: float
     p99_tbt_ms: float
-    slo_attainment: float
+    token_gap_slo_attainment: float
+    request_tbt_slo_attainment: float
+    tbt_request_goodput_tokens_per_s: float
     padded_verifier_slots: float
-    hit_externality_ms: float
+    direct_hit_delay_ms: float
     target_launches: float
     mean_batch: float
     throughput_ratio_vs_barrier: float
@@ -299,9 +326,11 @@ class AggregateRow:
             "throughput_tokens_per_s": self.throughput_tokens_per_s,
             "p95_tbt_ms": self.p95_tbt_ms,
             "p99_tbt_ms": self.p99_tbt_ms,
-            "slo_attainment": self.slo_attainment,
+            "token_gap_slo_attainment": self.token_gap_slo_attainment,
+            "request_tbt_slo_attainment": self.request_tbt_slo_attainment,
+            "tbt_request_goodput_tokens_per_s": self.tbt_request_goodput_tokens_per_s,
             "padded_verifier_slots": self.padded_verifier_slots,
-            "hit_externality_ms": self.hit_externality_ms,
+            "direct_hit_delay_ms": self.direct_hit_delay_ms,
             "target_launches": self.target_launches,
             "mean_batch": self.mean_batch,
             "throughput_ratio_vs_barrier": self.throughput_ratio_vs_barrier,
@@ -413,12 +442,25 @@ def outcome_key_digests(workload: Workload, seed: int) -> tuple[str, str]:
     return cache_digest.hexdigest(), token_digest.hexdigest()
 
 
+def implementation_sha256() -> str:
+    """Fingerprint every source file that defines the checked-in model."""
+
+    repository = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    for relative_path in IMPLEMENTATION_FILES:
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update((repository / relative_path).read_bytes())
+        digest.update(b"\x00")
+    return digest.hexdigest()
+
+
 def run_sweep(
     config: SweepConfig,
 ) -> tuple[list[ExperimentRow], list[dict[str, str | int]]]:
     """Run the full factorial with matched policy-level random streams."""
 
-    profile = HardwareProfile(name="synthetic-reference-not-gpu")
+    profile = synthetic_profile()
     rows: list[ExperimentRow] = []
     fingerprints: list[dict[str, str | int]] = []
     regimes = config.regimes()
@@ -508,9 +550,17 @@ def aggregate_rows(rows: list[ExperimentRow], config: SweepConfig) -> list[Aggre
                         ),
                         p95_tbt_ms=fmean(row.p95_tbt_ms for row in selected),
                         p99_tbt_ms=fmean(row.p99_tbt_ms for row in selected),
-                        slo_attainment=fmean(row.slo_attainment for row in selected),
+                        token_gap_slo_attainment=fmean(
+                            row.token_gap_slo_attainment for row in selected
+                        ),
+                        request_tbt_slo_attainment=fmean(
+                            row.request_tbt_slo_attainment for row in selected
+                        ),
+                        tbt_request_goodput_tokens_per_s=fmean(
+                            row.tbt_request_goodput_tokens_per_s for row in selected
+                        ),
                         padded_verifier_slots=fmean(row.padded_verifier_slots for row in selected),
-                        hit_externality_ms=fmean(row.hit_externality_ms for row in selected),
+                        direct_hit_delay_ms=fmean(row.direct_hit_delay_ms for row in selected),
                         target_launches=fmean(row.target_launches for row in selected),
                         mean_batch=fmean(row.mean_batch for row in selected),
                         throughput_ratio_vs_barrier=fmean(
@@ -534,16 +584,25 @@ def _write_json(
     fingerprints: list[dict[str, str | int]],
     csv_sha256: str,
 ) -> None:
+    profile = synthetic_profile()
     document: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 4,
         "evidence_class": EVIDENCE_CLASS,
         "measurement_warning": WARNING,
         "profile": {
-            "name": "synthetic-reference-not-gpu",
+            "name": profile.name,
             "kind": "synthetic latency model",
             "gpu_measurement": False,
+            "target_curve": [list(point) for point in profile.target_curve.points],
+            "draft_curve": [list(point) for point in profile.draft_curve.points],
+            "recovery_curve": [list(point) for point in profile.recovery_curve.points],
+            "verifier_slot_ms": profile.verifier_slot_ms,
         },
         "method": {
+            "generator": "experiments/run_synthetic_sweep.py",
+            "implementation_files": list(IMPLEMENTATION_FILES),
+            "implementation_sha256": implementation_sha256(),
+            "determinism": "no wall-clock or hardware inputs",
             "comparison": "matched-seed common random numbers",
             "factorial": ("cache-hit probability x token-acceptance probability"),
             "cache_hit_key": ("(seed, request_id, round_id, 'cache-hit', draw=0)"),
@@ -650,7 +709,7 @@ def _parser() -> argparse.ArgumentParser:
         default=(0.55, 0.90),
         help="comma-separated per-candidate token acceptance probabilities",
     )
-    parser.add_argument("--tbt-slo-ms", type=float, default=15.0)
+    parser.add_argument("--tbt-slo-ms", type=float, default=10.0)
     parser.add_argument("--max-batch-size", type=int, default=16)
     parser.add_argument("--poisson-mean-ms", type=float, default=0.45)
     parser.add_argument("--burst-size", type=int, default=12)

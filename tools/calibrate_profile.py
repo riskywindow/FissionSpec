@@ -44,24 +44,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.input.resolve() == args.output.resolve():
         raise SystemExit("input and output paths must differ")
     if args.output.exists() and not args.force:
-        raise SystemExit(
-            f"output already exists: {args.output} (pass --force to replace)"
-        )
+        raise SystemExit(f"output already exists: {args.output} (pass --force to replace)")
     provenance = None
     try:
         if args.provenance_json is not None:
-            provenance = json.loads(
-                args.provenance_json.read_text(encoding="utf-8")
-            )
+            provenance = json.loads(args.provenance_json.read_text(encoding="utf-8"))
             if not isinstance(provenance, dict):
                 raise SystemExit("provenance JSON must be an object")
         profile = fit_profile(load_samples_csv(args.input), name=args.name)
         if args.require_slot_slope and (
             not profile.slot_slope_identified or profile.slot_slope_clipped
         ):
-            raise SystemExit(
-                "target samples do not identify a non-negative verifier-slot slope"
-            )
+            raise SystemExit("target samples do not identify a non-negative verifier-slot slope")
         write_profile_json(profile, args.output, provenance=provenance)
     except (CalibrationError, json.JSONDecodeError, OSError) as exc:
         raise SystemExit(f"calibration failed: {exc}") from exc

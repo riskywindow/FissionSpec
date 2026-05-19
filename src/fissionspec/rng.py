@@ -140,6 +140,12 @@ class CounterRNG:
 
         return self._seed
 
+    @property
+    def provenance(self) -> str:
+        """Return a stable, non-secret fingerprint for paired-trace checks."""
+
+        return f"fissionspec-counter-rng-v1:{self._seed_key.hex()}"
+
     def _digest(
         self,
         request_id: RNGAtom,

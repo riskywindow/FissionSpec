@@ -3,7 +3,7 @@
 The oracle exhaustively searches policies that, whenever the target is idle
 and at least one request is ready, make one of two choices:
 
-* dispatch the simulator's FIFO-selected batch immediately; or
+* dispatch the simulator's stable deadline-first selected batch immediately; or
 * wait exactly until the simulator's next known readiness event.
 
 Each search node is evaluated by replaying the immutable workload from time
@@ -13,7 +13,7 @@ aggregate request flow time, ``sum(completion_ms - arrival_ms)``.
 
 The result is exact only within this action space and the simulator's
 outcome-decoupled fission semantics.  It is *not* a global serving oracle: it
-does not enumerate arbitrary request subsets, request reorderings, arbitrary
+does not enumerate arbitrary request subsets, alternative request orderings, arbitrary
 wait durations, target preemption, barriers, or padded recovery rows.
 
 Replaying a prefix assumes ``rng`` is stateless and counter-addressed: a draw
@@ -225,6 +225,7 @@ def offline_coalescing_oracle(
                 rng,
                 max_batch_size=max_batch_size,
                 max_events=max_events,
+                reveal_future_arrivals=True,
             )
         except _DecisionRequired:
             if policy.consumed_actions != len(action_prefix):

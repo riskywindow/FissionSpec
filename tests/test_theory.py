@@ -20,10 +20,7 @@ class TheoryTests(unittest.TestCase):
 
     def test_homogeneous_fallback_grows_with_batch(self) -> None:
         probability = 0.93
-        observed = [
-            batch_fallback_probability([probability] * batch)
-            for batch in (1, 2, 4, 8)
-        ]
+        observed = [batch_fallback_probability([probability] * batch) for batch in (1, 2, 4, 8)]
         self.assertEqual(observed, sorted(observed))
         self.assertAlmostEqual(observed[-1], 1.0 - probability**8)
 

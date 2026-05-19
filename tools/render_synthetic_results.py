@@ -144,8 +144,9 @@ def render_markdown(rows: list[dict[str, object]]) -> str:
         "",
         "| Workload | Cache p | Token p | Policy | Observed cache rate | "
         "Verifier tok/round | Throughput (tok/s) | P95 TBT (ms) | "
-        "SLO (%) | Padded slots | Hit externality (ms) | vs. barrier |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Gap TBT pass (%) | Request TBT pass (%) | TBT-request tok/s | Padded slots | "
+        "Direct delay / hit (ms) | vs. barrier |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for workload in WORKLOAD_ORDER:
         for cache_probability, token_probability in _factor_pairs(rows):
@@ -169,9 +170,11 @@ def render_markdown(rows: list[dict[str, object]]) -> str:
                             f"{_number(row, 'mean_verifier_tokens_per_round'):.3f}",
                             f"{_number(row, 'throughput_tokens_per_s'):.1f}",
                             f"{_number(row, 'p95_tbt_ms'):.2f}",
-                            f"{100.0 * _number(row, 'slo_attainment'):.1f}",
+                            f"{100.0 * _number(row, 'token_gap_slo_attainment'):.1f}",
+                            f"{100.0 * _number(row, 'request_tbt_slo_attainment'):.1f}",
+                            f"{_number(row, 'tbt_request_goodput_tokens_per_s'):.1f}",
                             f"{_number(row, 'padded_verifier_slots'):.1f}",
-                            f"{_number(row, 'hit_externality_ms'):.3f}",
+                            f"{_number(row, 'direct_hit_delay_ms'):.3f}",
                             f"{_number(row, 'throughput_ratio_vs_barrier'):.3f}x",
                         )
                     )

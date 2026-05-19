@@ -16,6 +16,10 @@ class DispatchContext:
     The horizon intentionally exposes only the next readiness event.  Looking
     through two target launches is enough to price the launch-now versus
     coalesce decision while avoiding oracle knowledge of future outcomes.
+    Slot and deadline tuples are paired in exact rolling-EDF admission order
+    within each cohort.  That is the minimum metadata needed to reproduce the
+    global admission merge at a prospective wake without exposing request
+    identities.
     """
 
     now_ms: float
@@ -23,24 +27,118 @@ class DispatchContext:
     capacity: int
     oldest_ready_ms: float
     earliest_deadline_ms: float
-    slots_per_row: int
+    row_slots: tuple[int, ...]
+    row_deadlines_ms: tuple[float, ...]
     profile: HardwareProfile
     next_ready_time_ms: float | None = None
     next_ready_count: int = 0
     earliest_future_deadline_ms: float | None = None
-    next_slots_per_row: int | None = None
+    future_row_slots: tuple[int, ...] = ()
+    future_row_deadlines_ms: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.ready_count <= 0:
+        if (
+            isinstance(self.ready_count, bool)
+            or not isinstance(self.ready_count, int)
+            or self.ready_count <= 0
+        ):
             raise ValueError("ready_count must be positive")
-        if self.capacity <= 0:
+        if (
+            isinstance(self.capacity, bool)
+            or not isinstance(self.capacity, int)
+            or self.capacity <= 0
+        ):
             raise ValueError("capacity must be positive")
-        if self.slots_per_row <= 0:
-            raise ValueError("slots_per_row must be positive")
-        if self.next_ready_count < 0:
+        if (
+            isinstance(self.next_ready_count, bool)
+            or not isinstance(self.next_ready_count, int)
+            or self.next_ready_count < 0
+        ):
             raise ValueError("next_ready_count must be non-negative")
-        if self.next_slots_per_row is not None and self.next_slots_per_row <= 0:
-            raise ValueError("next_slots_per_row must be positive when supplied")
+        for name, value in (
+            ("now_ms", self.now_ms),
+            ("oldest_ready_ms", self.oldest_ready_ms),
+            ("earliest_deadline_ms", self.earliest_deadline_ms),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"{name} must be finite")
+        if self.oldest_ready_ms > self.now_ms:
+            raise ValueError("oldest_ready_ms must not be in the future")
+        if self.next_ready_count and (
+            isinstance(self.next_ready_time_ms, bool)
+            or not isinstance(self.next_ready_time_ms, (int, float))
+            or not math.isfinite(self.next_ready_time_ms)
+            or self.next_ready_time_ms < self.now_ms
+        ):
+            raise ValueError("next_ready_time_ms must be a finite future readiness time")
+        selected_rows = min(self.ready_count, self.capacity)
+        if len(self.row_slots) != selected_rows or any(
+            isinstance(slots, bool) or not isinstance(slots, int) or slots <= 0
+            for slots in self.row_slots
+        ):
+            raise ValueError("row_slots must contain one positive width per selected row")
+        if len(self.row_deadlines_ms) != selected_rows or any(
+            isinstance(deadline, bool)
+            or not isinstance(deadline, (int, float))
+            or not math.isfinite(deadline)
+            for deadline in self.row_deadlines_ms
+        ):
+            raise ValueError("row_deadlines_ms must contain one finite deadline per selected row")
+        if any(
+            left > right
+            for left, right in zip(
+                self.row_deadlines_ms,
+                self.row_deadlines_ms[1:],
+                strict=False,
+            )
+        ):
+            raise ValueError("row_deadlines_ms must be in target-admission order")
+        if self.earliest_deadline_ms != self.row_deadlines_ms[0]:
+            raise ValueError("earliest_deadline_ms must match the first ordered row deadline")
+        if len(self.future_row_slots) != self.next_ready_count or any(
+            isinstance(slots, bool) or not isinstance(slots, int) or slots <= 0
+            for slots in self.future_row_slots
+        ):
+            raise ValueError("future_row_slots must contain one positive width per future row")
+        if len(self.future_row_deadlines_ms) != self.next_ready_count or any(
+            isinstance(deadline, bool)
+            or not isinstance(deadline, (int, float))
+            or not math.isfinite(deadline)
+            for deadline in self.future_row_deadlines_ms
+        ):
+            raise ValueError(
+                "future_row_deadlines_ms must contain one finite deadline per future row"
+            )
+        if any(
+            left > right
+            for left, right in zip(
+                self.future_row_deadlines_ms,
+                self.future_row_deadlines_ms[1:],
+                strict=False,
+            )
+        ):
+            raise ValueError("future_row_deadlines_ms must be in target-admission order")
+        if self.next_ready_count and (
+            self.earliest_future_deadline_ms is None
+            or self.earliest_future_deadline_ms != self.future_row_deadlines_ms[0]
+        ):
+            raise ValueError(
+                "earliest_future_deadline_ms must match the first ordered future deadline"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class _ForecastRow:
+    """One row in the exact target-admission forecast."""
+
+    deadline_ms: float
+    verifier_slots: int
+    is_future: bool
+    cohort_ordinal: int
 
 
 @runtime_checkable
@@ -115,7 +213,12 @@ class FixedCoalescePolicy:
     pad_recovering_misses: bool = False
 
     def __post_init__(self) -> None:
-        if not math.isfinite(self.coalesce_ms) or self.coalesce_ms < 0.0:
+        if (
+            isinstance(self.coalesce_ms, bool)
+            or not isinstance(self.coalesce_ms, (int, float))
+            or not math.isfinite(self.coalesce_ms)
+            or self.coalesce_ms < 0.0
+        ):
             raise ValueError("coalesce_ms must be finite and non-negative")
 
     def dispatch_at(self, context: DispatchContext) -> float:
@@ -125,7 +228,7 @@ class FixedCoalescePolicy:
         # Never knowingly turn a batching window into a deadline violation.
         latest_safe = context.earliest_deadline_ms - context.profile.target_latency_ms(
             min(context.ready_count, context.capacity),
-            min(context.ready_count, context.capacity) * context.slots_per_row,
+            sum(context.row_slots),
         )
         return max(context.now_ms, min(normal_due, latest_safe))
 
@@ -152,7 +255,12 @@ class FissionSpecPolicy:
     pad_recovering_misses: bool = False
 
     def __post_init__(self) -> None:
-        if not math.isfinite(self.max_wait_ms) or self.max_wait_ms < 0.0:
+        if (
+            isinstance(self.max_wait_ms, bool)
+            or not isinstance(self.max_wait_ms, (int, float))
+            or not math.isfinite(self.max_wait_ms)
+            or self.max_wait_ms < 0.0
+        ):
             raise ValueError("max_wait_ms must be finite and non-negative")
 
     def dispatch_at(self, context: DispatchContext) -> float:
@@ -163,74 +271,83 @@ class FissionSpecPolicy:
             return context.now_ms
         delay = max(0.0, next_time - context.now_ms)
         hard_wait_deadline = context.oldest_ready_ms + self.max_wait_ms
-        if (
-            delay <= 0.0
-            or context.now_ms >= hard_wait_deadline
-            or next_time > hard_wait_deadline
-        ):
+        if delay <= 0.0 or context.now_ms >= hard_wait_deadline or next_time > hard_wait_deadline:
             return context.now_ms
 
         now_rows = context.ready_count
         future_rows = context.next_ready_count
-        future_slots_per_row = (
-            context.next_slots_per_row
-            if context.next_slots_per_row is not None
-            else context.slots_per_row
+        current = tuple(
+            _ForecastRow(
+                deadline_ms=deadline_ms,
+                verifier_slots=slots,
+                is_future=False,
+                cohort_ordinal=index,
+            )
+            for index, (deadline_ms, slots) in enumerate(
+                zip(context.row_deadlines_ms, context.row_slots, strict=True)
+            )
         )
-        future_deadline = (
-            context.earliest_future_deadline_ms
-            if context.earliest_future_deadline_ms is not None
-            else math.inf
+        future = tuple(
+            _ForecastRow(
+                deadline_ms=deadline_ms,
+                verifier_slots=slots,
+                is_future=True,
+                cohort_ordinal=index,
+            )
+            for index, (deadline_ms, slots) in enumerate(
+                zip(
+                    context.future_row_deadlines_ms,
+                    context.future_row_slots,
+                    strict=True,
+                )
+            )
         )
-        first_latency = context.profile.target_latency_ms(
-            now_rows, now_rows * context.slots_per_row
-        )
+        first_latency = context.profile.target_latency_ms(now_rows, sum(context.row_slots))
 
         # Launch-now aggregate flow cost.  Future chunks arrive at ``delta``
         # but cannot use the target until its current launch has completed.
         target_available = max(next_time, context.now_ms + first_latency)
         launch_now_cost = now_rows * first_latency
-        launch_now_feasible = (
-            context.now_ms + first_latency <= context.earliest_deadline_ms
-        )
-        remaining_future = future_rows
-        while remaining_future > 0:
-            chunk = min(remaining_future, context.capacity)
+        current_completion = context.now_ms + first_latency
+        launch_now_feasible = all(current_completion <= row.deadline_ms for row in current)
+        for offset in range(0, future_rows, context.capacity):
+            chunk = future[offset : offset + context.capacity]
             target_available += context.profile.target_latency_ms(
-                chunk, chunk * future_slots_per_row
+                len(chunk),
+                sum(row.verifier_slots for row in chunk),
             )
-            launch_now_cost += chunk * (target_available - next_time)
-            launch_now_feasible = (
-                launch_now_feasible and target_available <= future_deadline
+            launch_now_cost += len(chunk) * (target_available - next_time)
+            launch_now_feasible = launch_now_feasible and all(
+                target_available <= row.deadline_ms for row in chunk
             )
-            remaining_future -= chunk
 
-        # Wait aggregate flow cost.  Ready rows retain priority in the first
-        # coalesced chunk, so only future rows can overflow behind them.
-        first_wait_rows = min(now_rows + future_rows, context.capacity)
-        future_in_first = max(0, first_wait_rows - now_rows)
-        first_wait_slots = (
-            now_rows * context.slots_per_row
-            + future_in_first * future_slots_per_row
-        )
-        first_wait_latency = context.profile.target_latency_ms(
-            first_wait_rows, first_wait_slots
-        )
-        wait_completion = next_time + first_wait_latency
-        wait_cost = now_rows * (wait_completion - context.now_ms)
-        wait_cost += future_in_first * (wait_completion - next_time)
-        wait_feasible = wait_completion <= context.earliest_deadline_ms
-        if future_in_first:
-            wait_feasible = wait_feasible and wait_completion <= future_deadline
-        remaining_future = future_rows - future_in_first
-        while remaining_future > 0:
-            chunk = min(remaining_future, context.capacity)
-            wait_completion += context.profile.target_latency_ms(
-                chunk, chunk * future_slots_per_row
+        # At the wake, the simulator globally re-runs rolling EDF admission.
+        # Each cohort is already in exact admission order. Current rows win
+        # cross-cohort deadline ties because their ready_since timestamp
+        # precedes the next readiness event.
+        wait_order = tuple(
+            sorted(
+                current + future,
+                key=lambda row: (
+                    row.deadline_ms,
+                    row.is_future,
+                    row.cohort_ordinal,
+                ),
             )
-            wait_cost += chunk * (wait_completion - next_time)
-            wait_feasible = wait_feasible and wait_completion <= future_deadline
-            remaining_future -= chunk
+        )
+        wait_completion = next_time
+        wait_cost = 0.0
+        wait_feasible = True
+        for offset in range(0, len(wait_order), context.capacity):
+            chunk = wait_order[offset : offset + context.capacity]
+            wait_completion += context.profile.target_latency_ms(
+                len(chunk),
+                sum(row.verifier_slots for row in chunk),
+            )
+            for row in chunk:
+                ready_at_ms = next_time if row.is_future else context.now_ms
+                wait_cost += wait_completion - ready_at_ms
+                wait_feasible = wait_feasible and wait_completion <= row.deadline_ms
 
         if not wait_feasible:
             return context.now_ms

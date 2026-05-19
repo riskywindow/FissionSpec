@@ -93,11 +93,13 @@ def _context(
         oldest_ready_ms=oldest_ready_ms,
         earliest_deadline_ms=current_deadline_ms,
         row_slots=(config.verifier_slots_per_row,) * current_rows,
+        row_deadlines_ms=(current_deadline_ms,) * current_rows,
         profile=profile,
         next_ready_time_ms=now_ms + recovery_eta_from_now_ms,
         next_ready_count=future_rows,
         earliest_future_deadline_ms=future_deadline_ms,
         future_row_slots=(config.verifier_slots_per_row,) * future_rows,
+        future_row_deadlines_ms=(future_deadline_ms,) * future_rows,
     )
 
 
@@ -325,6 +327,10 @@ def build_artifact(config: PhaseConfig | None = None) -> dict[str, object]:
                 "re-fuse means the real horizon-2 policy waits for the known next "
                 "readiness ETA while the real immediate-fission policy launches now"
             ),
+            "wake_admission": (
+                "global rolling EDF over current and next-ready rows; current rows "
+                "win exact deadline ties because they became ready earlier"
+            ),
         },
         "controller": {
             "max_wait_ms": config.max_wait_ms,
@@ -461,8 +467,8 @@ def render_svg(document: dict[str, object]) -> str:
             f'fill="#334155">target knots (rows→ms): {html.escape(knot_text)}; '
             f"slot cost: {float(profile['verifier_slot_ms']):g} ms</text>",
             '<text x="30" y="554" font-family="sans-serif" font-size="11" '
-            'fill="#475569">Every cell calls FissionSpecPolicy.dispatch_at and '
-            "ImmediateFissionPolicy.dispatch_at; no measured samples are plotted.</text>",
+            'fill="#475569">Every cell calls both real policies with an exact '
+            "rolling-EDF wake forecast; no measured samples are plotted.</text>",
             "</svg>",
         )
     )

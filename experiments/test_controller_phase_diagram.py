@@ -65,6 +65,8 @@ class ControllerPhaseDiagramTests(unittest.TestCase):
             [[1, 2.1], [4, 2.8], [8, 3.8], [16, 5.9], [32, 10.5]],
         )
         self.assertEqual(profile["verifier_slot_ms"], 0.018)
+        comparison = cast(dict[str, object], self.document["comparison"])
+        self.assertIn("global rolling EDF", cast(str, comparison["wake_admission"]))
 
     def test_near_eta_can_refuse_and_late_eta_dispatches(self) -> None:
         near_matrix = cast(

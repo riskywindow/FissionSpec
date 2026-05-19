@@ -2,7 +2,7 @@
 
 The target verifier and draft/recovery engine have independent clocks.  The
 event queue is deterministic, but random outcomes are *not* consumed from it:
-every acceptance draw is addressed by ``(request_id, round_id, stream)``.
+every draw is addressed by ``(request_id, round_id, stream, draw)``.
 Consequently, changing a batching policy does not perturb another request's
 counterfactual outcome trace.
 """
@@ -36,10 +36,13 @@ class ScheduleIndependentRNG(Protocol):
     mutable consumption order for a scheduling decision to perturb.
     """
 
-    def uniform(
-        self, request_id: str, round_id: int, stream: str, draw: int
-    ) -> float:
+    @property
+    def provenance(self) -> str:
+        """Stable identity of the complete deterministic random source."""
+
+    def uniform(self, request_id: str, round_id: int, stream: str, draw: int) -> float:
         """Return a deterministic value in the half-open interval ``[0, 1)``."""
+
 
 class SimulationError(RuntimeError):
     """Raised when an invalid event trace would prevent forward progress."""
@@ -90,13 +93,13 @@ class _TargetPayload:
 class Simulator:
     """Run one policy on an immutable workload and hardware profile.
 
-    A hit emits a full speculative block; a miss emits its one target token.
-    Every real verifier launch concurrently queues next-round outcome-cache
-    construction on the non-preemptive FIFO draft engine.  Hits consume that
-    prepared branch at ``max(target_end, precompute_end)``; misses invalidate
-    it and execute the recovery curve.  Cache lookup is independent of the
-    accepted-token prefix produced by the current verifier.  Policy semantics
-    determine whether outcomes remain coupled on the target timeline.
+    Every verifier emits a target-authorized accepted prefix plus one
+    correction/bonus token. Independently, the realized outcome either names
+    a next-round continuation prepared concurrently on the non-preemptive FIFO
+    draft engine or misses that cache. Hits consume the branch at
+    ``max(target_end, precompute_end)``; misses invalidate it and execute the
+    recovery curve. Policy semantics determine whether those readiness events
+    remain coupled on the target timeline.
     """
 
     _EPSILON = 1e-12
@@ -110,6 +113,7 @@ class Simulator:
         rng: ScheduleIndependentRNG,
         max_batch_size: int = 16,
         max_events: int = 1_000_000,
+        reveal_future_arrivals: bool = False,
     ) -> None:
         if (
             isinstance(max_batch_size, bool)
@@ -117,21 +121,24 @@ class Simulator:
             or max_batch_size <= 0
         ):
             raise ValueError("max_batch_size must be a positive integer")
-        if (
-            isinstance(max_events, bool)
-            or not isinstance(max_events, int)
-            or max_events <= 0
-        ):
+        if isinstance(max_events, bool) or not isinstance(max_events, int) or max_events <= 0:
             raise ValueError("max_events must be a positive integer")
+        if not isinstance(reveal_future_arrivals, bool):
+            raise TypeError("reveal_future_arrivals must be a bool")
         if not isinstance(policy, SchedulingPolicy):
             raise TypeError("policy does not satisfy SchedulingPolicy")
+        rng_provenance = rng.provenance
+        if not isinstance(rng_provenance, str) or not rng_provenance:
+            raise ValueError("rng.provenance must be a non-empty string")
 
         self.workload = workload
         self.profile = profile
         self.policy = policy
         self.rng = rng
+        self.rng_provenance = rng_provenance
         self.max_batch_size = max_batch_size
         self.max_events = max_events
+        self.reveal_future_arrivals = reveal_future_arrivals
 
         self._configs = {request.request_id: request for request in workload}
         self._states = {
@@ -167,30 +174,19 @@ class Simulator:
         self._sequence += 1
         heapq.heappush(self._events, _Event(time_ms, self._sequence, kind, payload))
 
-    def _uniform(
-        self, request_id: str, round_id: int, stream: str, draw: int
-    ) -> float:
+    def _uniform(self, request_id: str, round_id: int, stream: str, draw: int) -> float:
         value = self.rng.uniform(request_id, round_id, stream, draw)
         if not math.isfinite(value) or not 0.0 <= value < 1.0:
             raise SimulationError("rng.uniform must return a finite value in [0, 1)")
         return value
 
-    def _token_productivity(
-        self, request_id: str, round_id: int, width: int
-    ) -> tuple[int, int]:
+    def _token_productivity(self, request_id: str, round_id: int, width: int) -> tuple[int, int]:
         """Return ``(accepted_draft_tokens, emitted_tokens)`` for one block."""
 
-        probability = self._configs[
-            request_id
-        ].token_acceptance_probability_for_round(round_id)
+        probability = self._configs[request_id].token_acceptance_probability_for_round(round_id)
         accepted = 0
         for draw in range(width - 1):
-            if (
-                self._uniform(
-                    request_id, round_id, "token-acceptance", draw
-                )
-                < probability
-            ):
+            if self._uniform(request_id, round_id, "token-acceptance", draw) < probability:
                 accepted += 1
             else:
                 break
@@ -247,9 +243,7 @@ class Simulator:
                 state.ready_since_ms = self._now_ms
                 state.waiting_precompute_round = None
 
-    def _schedule_precompute(
-        self, requests: tuple[tuple[str, int], ...]
-    ) -> float | None:
+    def _schedule_precompute(self, requests: tuple[tuple[str, int], ...]) -> float | None:
         """Launch outcome-cache construction without changing target phases."""
 
         if not requests:
@@ -284,10 +278,14 @@ class Simulator:
         pad_eligible: bool = True,
         held_request_ids: tuple[str, ...] = (),
     ) -> float | None:
-        work_ids = request_ids if barrier else tuple(
-            request_id
-            for request_id in request_ids
-            if self._states[request_id].phase is not RequestPhase.COMPLETE
+        work_ids = (
+            request_ids
+            if barrier
+            else tuple(
+                request_id
+                for request_id in request_ids
+                if self._states[request_id].phase is not RequestPhase.COMPLETE
+            )
         )
         live_ids = tuple(
             request_id
@@ -303,9 +301,7 @@ class Simulator:
         )
 
         start_ms = max(self._now_ms, self._draft_free_ms)
-        end_ms = start_ms + self.profile.draft_latency_ms(
-            len(work_ids), recovery=recovery
-        )
+        end_ms = start_ms + self.profile.draft_latency_ms(len(work_ids), recovery=recovery)
         epochs: list[tuple[str, int, int]] = []
         for request_id in live_ids + held_ids:
             state = self._states[request_id]
@@ -398,29 +394,28 @@ class Simulator:
             if launched_rounds.get(request_id) != round_id:
                 raise SimulationError("target round changed while launch was in flight")
             width = launched_widths[request_id]
-            accepted, productive = self._token_productivity(
-                request_id, round_id, width
-            )
-            cache_hit = self._uniform(
-                request_id, round_id, "cache-hit", 0
-            ) < config.cache_hit_probability_for_round(round_id)
+            accepted, productive = self._token_productivity(request_id, round_id, width)
             emitted = state.emit(productive, self._now_ms)
             state.accepted_draft_tokens += min(accepted, emitted)
             state.verifier_emitted_tokens += emitted
             accepted_tokens.append((request_id, min(accepted, emitted)))
             productive_tokens.append((request_id, emitted))
             state.round_id += 1
-            if cache_hit:
+            if state.remaining_tokens == 0:
+                # No next continuation exists, so sampling or counting cache
+                # membership would invent a lookup that serving never uses.
+                outcome = Outcome.TERMINAL
+            elif self._uniform(
+                request_id, round_id, "cache-hit", 0
+            ) < config.cache_hit_probability_for_round(round_id):
                 outcome = Outcome.HIT
                 state.hits += 1
-                if state.remaining_tokens > 0:
-                    hit_survivors.append(request_id)
-                    hit_survivor_rounds.append((request_id, round_id))
+                hit_survivors.append(request_id)
+                hit_survivor_rounds.append((request_id, round_id))
             else:
                 outcome = Outcome.MISS
                 state.misses += 1
-                if state.remaining_tokens > 0:
-                    miss_survivors.append(request_id)
+                miss_survivors.append(request_id)
             outcomes.append((request_id, outcome))
 
         if payload.padded_request_ids and payload.request_ids:
@@ -428,7 +423,7 @@ class Simulator:
             padding_delay = max(0.0, actual_latency - payload.no_padding_latency_ms)
             for request_id, outcome in outcomes:
                 if outcome is Outcome.HIT:
-                    self._states[request_id].hit_externality_ms += padding_delay
+                    self._states[request_id].direct_hit_delay_ms += padding_delay
 
         if self.policy.barrier_on_miss and miss_survivors:
             recovery_end_ms = self._schedule_draft(
@@ -447,13 +442,11 @@ class Simulator:
             )
             barrier_delay = max(0.0, recovery_end_ms - local_hit_eligibility_ms)
             for request_id in hit_survivors:
-                self._states[request_id].hit_externality_ms += barrier_delay
+                self._states[request_id].direct_hit_delay_ms += barrier_delay
         else:
             # SSD hits consume the branch constructed concurrently with the
             # target verification. Misses invalidate that work and recover.
-            self._release_precomputed_hits(
-                tuple(hit_survivor_rounds), payload.precompute_end_ms
-            )
+            self._release_precomputed_hits(tuple(hit_survivor_rounds), payload.precompute_end_ms)
             self._schedule_draft(tuple(pad_redraft_ids), recovery=False)
             self._schedule_draft(tuple(miss_survivors), recovery=True)
 
@@ -478,9 +471,7 @@ class Simulator:
         elif event.kind is _EventKind.DRAFT_READY:
             self._handle_draft_ready(cast(_DraftReadyPayload, event.payload))
         elif event.kind is _EventKind.PRECOMPUTE_READY:
-            self._handle_precompute_ready(
-                cast(_PrecomputeReadyPayload, event.payload)
-            )
+            self._handle_precompute_ready(cast(_PrecomputeReadyPayload, event.payload))
         elif event.kind is _EventKind.TARGET_COMPLETE:
             self._complete_target(cast(_TargetPayload, event.payload))
         elif event.kind is _EventKind.DISPATCH_WAKE:
@@ -498,6 +489,7 @@ class Simulator:
         ]
         states.sort(
             key=lambda state: (
+                state.next_token_deadline_ms,
                 cast(float, state.ready_since_ms),
                 state.arrival_ms,
                 state.request_id,
@@ -522,12 +514,18 @@ class Simulator:
 
     def _next_readiness(
         self,
-    ) -> tuple[float | None, int, float | None, int | None]:
+    ) -> tuple[
+        float | None,
+        int,
+        float | None,
+        tuple[int, ...],
+        tuple[float, ...],
+    ]:
         next_time: float | None = None
         next_request_ids: list[str] = []
         for event in self._events:
             event_request_ids: list[str] = []
-            if event.kind is _EventKind.ARRIVAL:
+            if event.kind is _EventKind.ARRIVAL and self.reveal_future_arrivals:
                 request_id = cast(str, event.payload)
                 if self._states[request_id].phase is RequestPhase.NOT_ARRIVED:
                     event_request_ids.append(request_id)
@@ -555,21 +553,36 @@ class Simulator:
                 next_request_ids = event_request_ids
             elif abs(event.time_ms - next_time) <= self._EPSILON:
                 next_request_ids.extend(event_request_ids)
-        unique_request_ids = tuple(dict.fromkeys(next_request_ids))
-        if not unique_request_ids:
-            return None, 0, None, None
-        earliest_deadline = min(
-            self._states[request_id].absolute_deadline_ms
-            for request_id in unique_request_ids
+        unique_request_ids = tuple(
+            sorted(
+                set(next_request_ids),
+                key=lambda request_id: (
+                    self._states[request_id].next_token_deadline_ms,
+                    self._states[request_id].arrival_ms,
+                    request_id,
+                ),
+            )
         )
-        slots_per_row = max(
+        if not unique_request_ids:
+            return None, 0, None, (), ()
+        future_row_deadlines_ms = tuple(
+            self._states[request_id].next_token_deadline_ms for request_id in unique_request_ids
+        )
+        earliest_deadline = future_row_deadlines_ms[0]
+        future_row_slots = tuple(
             min(
                 self._states[request_id].speculation_length,
                 self._states[request_id].remaining_tokens,
             )
             for request_id in unique_request_ids
         )
-        return next_time, len(unique_request_ids), earliest_deadline, slots_per_row
+        return (
+            next_time,
+            len(unique_request_ids),
+            earliest_deadline,
+            future_row_slots,
+            future_row_deadlines_ms,
+        )
 
     def _schedule_wake(self, time_ms: float) -> None:
         if time_ms in self._wake_times:
@@ -577,9 +590,7 @@ class Simulator:
         self._wake_times.add(time_ms)
         self._push(time_ms, _EventKind.DISPATCH_WAKE, None)
 
-    def _launch_target(
-        self, real_states: list[RequestState], padded_ids: tuple[str, ...]
-    ) -> None:
+    def _launch_target(self, real_states: list[RequestState], padded_ids: tuple[str, ...]) -> None:
         request_ids = tuple(state.request_id for state in real_states)
         request_widths = tuple(
             (
@@ -613,9 +624,7 @@ class Simulator:
         if effective_rows > self.max_batch_size:
             raise SimulationError("target launch exceeds max_batch_size")
 
-        request_rounds = tuple(
-            (state.request_id, state.round_id) for state in real_states
-        )
+        request_rounds = tuple((state.request_id, state.round_id) for state in real_states)
         precompute_requests = tuple(
             (state.request_id, state.round_id)
             for state in real_states
@@ -623,9 +632,9 @@ class Simulator:
                 state.remaining_tokens == 1
                 or (
                     state.remaining_tokens <= state.speculation_length
-                    and self._configs[
-                        state.request_id
-                    ].token_acceptance_probability_for_round(state.round_id)
+                    and self._configs[state.request_id].token_acceptance_probability_for_round(
+                        state.round_id
+                    )
                     == 1.0
                 )
             )
@@ -639,9 +648,7 @@ class Simulator:
 
         duration = self.profile.target_latency_ms(effective_rows, verifier_slots)
         no_padding_latency = (
-            self.profile.target_latency_ms(len(request_ids), real_slots)
-            if request_ids
-            else 0.0
+            self.profile.target_latency_ms(len(request_ids), real_slots) if request_ids else 0.0
         )
         end_ms = self._now_ms + duration
         self._target_busy = True
@@ -664,42 +671,44 @@ class Simulator:
     def _try_dispatch(self) -> None:
         if self._target_busy:
             return
-        padded_ids = self._padding_ids()
+        padding_candidates = self._padding_ids()
         ready = self._ready_states()
         if not ready:
-            if padded_ids:
-                self._launch_target([], padded_ids)
-            return
-        capacity = self.max_batch_size - len(padded_ids)
-        if capacity <= 0:
-            self._launch_target([], padded_ids)
+            if padding_candidates:
+                self._launch_target([], padding_candidates)
             return
 
-        selected = ready[:capacity]
+        # Productive speculative rows get first claim on physical capacity.
+        # Parallel-mode padding may fill idle rows, but never displaces a ready
+        # continuation and thereby weakens the SPECTRE component baseline.
+        selected = ready[: self.max_batch_size]
+        padded_ids = padding_candidates[: self.max_batch_size - len(selected)]
+        capacity = self.max_batch_size - len(padded_ids)
         (
             next_ready_time,
             next_ready_count,
             earliest_future_deadline,
-            next_slots_per_row,
+            future_row_slots,
+            future_row_deadlines_ms,
         ) = self._next_readiness()
-        slots_per_row = max(
-            min(state.speculation_length, state.remaining_tokens)
-            for state in selected
+        row_slots = tuple(
+            min(state.speculation_length, state.remaining_tokens) for state in selected
         )
+        row_deadlines_ms = tuple(state.next_token_deadline_ms for state in selected)
         context = DispatchContext(
             now_ms=self._now_ms,
             ready_count=len(ready),
             capacity=capacity,
-            oldest_ready_ms=min(
-                cast(float, state.ready_since_ms) for state in selected
-            ),
-            earliest_deadline_ms=min(state.absolute_deadline_ms for state in selected),
-            slots_per_row=slots_per_row,
+            oldest_ready_ms=min(cast(float, state.ready_since_ms) for state in selected),
+            earliest_deadline_ms=min(state.next_token_deadline_ms for state in selected),
+            row_slots=row_slots,
+            row_deadlines_ms=row_deadlines_ms,
             profile=self.profile,
             next_ready_time_ms=next_ready_time,
             next_ready_count=next_ready_count,
             earliest_future_deadline_ms=earliest_future_deadline,
-            next_slots_per_row=next_slots_per_row,
+            future_row_slots=future_row_slots,
+            future_row_deadlines_ms=future_row_deadlines_ms,
         )
         dispatch_at = self.policy.dispatch_at(context)
         if not math.isfinite(dispatch_at) or dispatch_at < self._now_ms - self._EPSILON:
@@ -731,17 +740,12 @@ class Simulator:
             self._now_ms = self._events[0].time_ms
             # Drain all events at this instant, including zero-delay events
             # created by another handler, before making a batching decision.
-            while (
-                self._events
-                and self._events[0].time_ms <= self._now_ms + self._EPSILON
-            ):
+            while self._events and self._events[0].time_ms <= self._now_ms + self._EPSILON:
                 event = heapq.heappop(self._events)
                 self._handle_event(event)
                 processed += 1
                 if processed >= self.max_events and not self._all_complete():
-                    raise SimulationError(
-                        "max_events exceeded; policy may not make progress"
-                    )
+                    raise SimulationError("max_events exceeded; policy may not make progress")
             self._try_dispatch()
 
         request_results = tuple(
@@ -756,7 +760,7 @@ class Simulator:
                 accepted_draft_tokens=state.accepted_draft_tokens,
                 verifier_emitted_tokens=state.verifier_emitted_tokens,
                 tbt_slo_ms=state.tbt_slo_ms,
-                hit_externality_ms=state.hit_externality_ms,
+                direct_hit_delay_ms=state.direct_hit_delay_ms,
             )
             for state in sorted(self._states.values(), key=lambda item: item.request_id)
         )
@@ -766,6 +770,7 @@ class Simulator:
             policy_name=self.policy.name,
             hardware_name=self.profile.name,
             workload_name=self.workload.name,
+            rng_provenance=self.rng_provenance,
             profile=self.profile,
             workload=self.workload,
             requests=request_results,
@@ -787,8 +792,14 @@ def simulate(
     *,
     max_batch_size: int = 16,
     max_events: int = 1_000_000,
+    reveal_future_arrivals: bool = False,
 ) -> SimulationResult:
-    """Functional entry point for one deterministic policy run."""
+    """Functional entry point for one deterministic policy run.
+
+    ``reveal_future_arrivals`` is reserved for offline lower-bound searches.
+    Online policies must leave it false: only recovery/precompute completion
+    times are knowable readiness forecasts in a live request stream.
+    """
 
     return Simulator(
         workload=workload,
@@ -797,4 +808,5 @@ def simulate(
         rng=rng,
         max_batch_size=max_batch_size,
         max_events=max_events,
+        reveal_future_arrivals=reveal_future_arrivals,
     ).run()

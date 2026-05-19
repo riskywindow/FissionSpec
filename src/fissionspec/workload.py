@@ -15,7 +15,12 @@ ProbabilitySchedule = float | tuple[float, ...]
 
 
 def _finite_non_negative(value: float, field: str) -> None:
-    if not math.isfinite(value) or value < 0.0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value < 0.0
+    ):
         raise ValueError(f"{field} must be finite and non-negative")
 
 
@@ -32,6 +37,9 @@ class RequestConfig:
     ``arrival_ms`` is the time at which decoding is ready after prefill and the
     initial proposal.  This steady-state decoder model does not charge TTFT,
     prefill, or ``prompt_tokens`` to either simulated engine.
+    ``speculation_length`` is the verifier width including the final target
+    correction/bonus position, so a real round emits between one and that many
+    tokens.
     """
 
     request_id: str
@@ -45,8 +53,8 @@ class RequestConfig:
     prompt_tokens: int = 0
 
     def __post_init__(self) -> None:
-        if not self.request_id:
-            raise ValueError("request_id must not be empty")
+        if not isinstance(self.request_id, str) or not self.request_id:
+            raise ValueError("request_id must be a non-empty string")
         _finite_non_negative(self.arrival_ms, "arrival_ms")
         _finite_non_negative(self.tbt_slo_ms, "tbt_slo_ms")
         if self.deadline_ms is not None:
@@ -72,18 +80,14 @@ class RequestConfig:
         ):
             raise ValueError("prompt_tokens must be a non-negative integer")
 
-        self._validate_schedule(
-            self.cache_hit_probability, field="cache_hit_probability"
-        )
+        self._validate_schedule(self.cache_hit_probability, field="cache_hit_probability")
         self._validate_schedule(
             self.token_acceptance_probability,
             field="token_acceptance_probability",
         )
 
     @classmethod
-    def _validate_schedule(
-        cls, probabilities: ProbabilitySchedule, *, field: str
-    ) -> None:
+    def _validate_schedule(cls, probabilities: ProbabilitySchedule, *, field: str) -> None:
         if isinstance(probabilities, tuple):
             if not probabilities:
                 raise ValueError(f"{field} tuple must not be empty")
@@ -119,7 +123,12 @@ class RequestConfig:
 
     @property
     def absolute_deadline_ms(self) -> float:
-        """Explicit deadline, or a conservative output-length TBT budget."""
+        """Explicit final deadline, or a conservative output-length budget.
+
+        After the first emitted token, the simulator separately enforces a
+        rolling next-token TBT deadline; this value caps that bound rather than
+        replacing it. TTFT is outside this steady-state model.
+        """
 
         if self.deadline_ms is not None:
             return self.deadline_ms
@@ -136,6 +145,8 @@ class Workload:
     def __post_init__(self) -> None:
         if not self.requests:
             raise ValueError("a workload must contain at least one request")
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("workload name must be a non-empty string")
         request_ids = [request.request_id for request in self.requests]
         if len(request_ids) != len(set(request_ids)):
             raise ValueError("request_id values must be unique within a workload")

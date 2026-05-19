@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "name": "one-miss-plus-15-hits",
+  "description": "Deterministic mechanism trace: one request always misses and fifteen always hit.",
+  "requests": [
+    {"request_id": "miss", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 0.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-00", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-01", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-02", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-03", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-04", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-05", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-06", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-07", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-08", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-09", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-10", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-11", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-12", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-13", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0},
+    {"request_id": "hit-14", "output_tokens": 64, "speculation_length": 4, "cache_hit_probability": 1.0, "token_acceptance_probability": 0.8, "tbt_slo_ms": 50.0}
+  ]
+}

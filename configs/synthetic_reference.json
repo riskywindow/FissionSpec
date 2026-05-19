@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "synthetic-reference-not-a-gpu-measurement",
+  "provenance": {
+    "kind": "synthetic",
+    "warning": "Illustrative monotone latency surface. Do not report as hardware performance."
+  },
+  "target_curve": [[1, 2.1], [4, 2.8], [8, 3.8], [16, 5.9], [32, 10.5]],
+  "draft_curve": [[1, 0.55], [4, 0.78], [8, 1.05], [16, 1.65], [32, 2.85]],
+  "recovery_curve": [[1, 1.25], [4, 1.7], [8, 2.3], [16, 3.5], [32, 5.9]],
+  "verifier_slot_ms": 0.018
+}

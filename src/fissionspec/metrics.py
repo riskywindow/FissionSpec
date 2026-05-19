@@ -25,11 +25,7 @@ def batch_fallback_probability(hit_probabilities: Iterable[float]) -> float:
     if any(probability == 0.0 for probability in probabilities):
         return 1.0
     log_product = math.fsum(
-        (
-            math.log(probability)
-            if probability < 0.5
-            else math.log1p(probability - 1.0)
-        )
+        (math.log(probability) if probability < 0.5 else math.log1p(probability - 1.0))
         for probability in probabilities
     )
     # -expm1(log(product)) preserves rare fallback probabilities that would be
@@ -101,8 +97,17 @@ class SimulationMetrics:
     """Publication-oriented aggregate metrics for one completed trace.
 
     TBT excludes time-to-first-token and includes zero gaps inside an accepted
-    speculative block.  ``slo_attainment`` is the fraction of emitted
-    inter-token gaps at or below that request's TBT SLO.
+    speculative block. ``token_gap_slo_attainment`` is the fraction of emitted
+    inter-token gaps at or below that request's TBT SLO;
+    ``request_tbt_slo_attainment`` requires every measured gap of a request to
+    pass. A one-token request therefore passes vacuously because this model
+    excludes TTFT. ``tbt_request_goodput_tokens_per_s`` counts all output tokens
+    from such requests over response makespan; it is not total-GPU goodput.
+
+    ``direct_hit_delay_ms`` is a deliberately narrow attribution: barrier hold
+    or incremental padded-launch service divided by all nonterminal cache hits.
+    It is not conditional end-to-end slowdown and excludes ordinary queueing
+    and deliberate refusion wait; use paired TBT/flow metrics for those effects.
     """
 
     policy_name: str
@@ -113,16 +118,19 @@ class SimulationMetrics:
     observed_cache_hit_rate: float
     accepted_draft_tokens: int
     verifier_emitted_tokens: int
+    verifier_rounds: int
     mean_verifier_tokens_per_round: float
     makespan_ms: float
     p50_tbt_ms: float
     p95_tbt_ms: float
     p99_tbt_ms: float
     throughput_tokens_per_s: float
-    slo_attainment: float
+    token_gap_slo_attainment: float
+    request_tbt_slo_attainment: float
+    tbt_request_goodput_tokens_per_s: float
     padded_verifier_slots: int
-    hit_externality_ms: float
-    total_hit_externality_ms: float
+    direct_hit_delay_ms: float
+    total_direct_hit_delay_ms: float
     target_launches: int
     draft_launches: int
     mean_batch: float
@@ -158,6 +166,8 @@ def summarize(result: SimulationResult) -> SimulationMetrics:
 
     tbt_values: list[float] = []
     slo_successes = 0
+    request_slo_successes = 0
+    tbt_compliant_request_tokens = 0
     total_hits = 0
     total_externality = 0.0
     accepted_draft_tokens = 0
@@ -166,22 +176,27 @@ def summarize(result: SimulationResult) -> SimulationMetrics:
         gaps = request.inter_token_times_ms
         tbt_values.extend(gaps)
         slo_successes += sum(gap <= request.tbt_slo_ms for gap in gaps)
+        if all(gap <= request.tbt_slo_ms for gap in gaps):
+            request_slo_successes += 1
+            tbt_compliant_request_tokens += request.output_tokens
         total_hits += request.hits
-        total_externality += request.hit_externality_ms
+        total_externality += request.direct_hit_delay_ms
         accepted_draft_tokens += request.accepted_draft_tokens
         verifier_emitted_tokens += request.verifier_emitted_tokens
 
     total_misses = sum(request.misses for request in result.requests)
-    total_rounds = total_hits + total_misses
+    cache_lookups = total_hits + total_misses
+    verifier_rounds = sum(len(launch.request_ids) for launch in result.target_launches)
     makespan = result.makespan_ms
-    throughput = (
-        result.total_output_tokens * 1000.0 / makespan if makespan > 0.0 else 0.0
+    throughput = result.total_output_tokens * 1000.0 / makespan if makespan > 0.0 else 0.0
+    token_gap_slo_attainment = slo_successes / len(tbt_values) if tbt_values else 1.0
+    request_tbt_slo_attainment = request_slo_successes / len(result.requests)
+    tbt_request_goodput = (
+        tbt_compliant_request_tokens * 1000.0 / makespan if makespan > 0.0 else 0.0
     )
-    slo_attainment = slo_successes / len(tbt_values) if tbt_values else 1.0
     target_launch_count = len(result.target_launches)
     mean_batch = (
-        sum(launch.effective_batch_size for launch in result.target_launches)
-        / target_launch_count
+        sum(launch.effective_batch_size for launch in result.target_launches) / target_launch_count
         if target_launch_count
         else 0.0
     )
@@ -191,21 +206,24 @@ def summarize(result: SimulationResult) -> SimulationMetrics:
         output_tokens=result.total_output_tokens,
         cache_hits=total_hits,
         cache_misses=total_misses,
-        observed_cache_hit_rate=(total_hits / total_rounds if total_rounds else 0.0),
+        observed_cache_hit_rate=(total_hits / cache_lookups if cache_lookups else 0.0),
         accepted_draft_tokens=accepted_draft_tokens,
         verifier_emitted_tokens=verifier_emitted_tokens,
+        verifier_rounds=verifier_rounds,
         mean_verifier_tokens_per_round=(
-            verifier_emitted_tokens / total_rounds if total_rounds else 0.0
+            verifier_emitted_tokens / verifier_rounds if verifier_rounds else 0.0
         ),
         makespan_ms=makespan,
         p50_tbt_ms=percentile(tbt_values, 0.50),
         p95_tbt_ms=percentile(tbt_values, 0.95),
         p99_tbt_ms=percentile(tbt_values, 0.99),
         throughput_tokens_per_s=throughput,
-        slo_attainment=slo_attainment,
+        token_gap_slo_attainment=token_gap_slo_attainment,
+        request_tbt_slo_attainment=request_tbt_slo_attainment,
+        tbt_request_goodput_tokens_per_s=tbt_request_goodput,
         padded_verifier_slots=result.padded_verifier_slots,
-        hit_externality_ms=(total_externality / total_hits if total_hits else 0.0),
-        total_hit_externality_ms=total_externality,
+        direct_hit_delay_ms=(total_externality / total_hits if total_hits else 0.0),
+        total_direct_hit_delay_ms=total_externality,
         target_launches=target_launch_count,
         draft_launches=len(result.draft_launches),
         mean_batch=mean_batch,
@@ -226,9 +244,11 @@ class CounterfactualMetrics:
     p99_tbt_delta_ms: float
     throughput_delta_tokens_per_s: float
     throughput_ratio: float
-    slo_attainment_delta: float
+    token_gap_slo_attainment_delta: float
+    request_tbt_slo_attainment_delta: float
+    tbt_request_goodput_delta_tokens_per_s: float
     padded_verifier_slots_delta: int
-    hit_externality_delta_ms: float
+    direct_hit_delay_delta_ms: float
     target_launches_delta: int
     mean_batch_delta: float
 
@@ -246,6 +266,8 @@ def counterfactual_metrics(
         raise ValueError("counterfactual traces must use identical workload configs")
     if candidate.profile != baseline.profile:
         raise ValueError("counterfactual traces must use an identical hardware profile")
+    if candidate.rng_provenance != baseline.rng_provenance:
+        raise ValueError("counterfactual traces must use identical RNG provenance")
     candidate_metrics = summarize(candidate)
     baseline_metrics = summarize(baseline)
     if candidate_metrics.output_tokens != baseline_metrics.output_tokens:
@@ -263,20 +285,25 @@ def counterfactual_metrics(
         p95_tbt_delta_ms=candidate_metrics.p95_tbt_ms - baseline_metrics.p95_tbt_ms,
         p99_tbt_delta_ms=candidate_metrics.p99_tbt_ms - baseline_metrics.p99_tbt_ms,
         throughput_delta_tokens_per_s=(
-            candidate_metrics.throughput_tokens_per_s
-            - baseline_metrics.throughput_tokens_per_s
+            candidate_metrics.throughput_tokens_per_s - baseline_metrics.throughput_tokens_per_s
         ),
         throughput_ratio=throughput_ratio,
-        slo_attainment_delta=(
-            candidate_metrics.slo_attainment - baseline_metrics.slo_attainment
+        token_gap_slo_attainment_delta=(
+            candidate_metrics.token_gap_slo_attainment - baseline_metrics.token_gap_slo_attainment
+        ),
+        request_tbt_slo_attainment_delta=(
+            candidate_metrics.request_tbt_slo_attainment
+            - baseline_metrics.request_tbt_slo_attainment
+        ),
+        tbt_request_goodput_delta_tokens_per_s=(
+            candidate_metrics.tbt_request_goodput_tokens_per_s
+            - baseline_metrics.tbt_request_goodput_tokens_per_s
         ),
         padded_verifier_slots_delta=(
-            candidate_metrics.padded_verifier_slots
-            - baseline_metrics.padded_verifier_slots
+            candidate_metrics.padded_verifier_slots - baseline_metrics.padded_verifier_slots
         ),
-        hit_externality_delta_ms=(
-            candidate_metrics.hit_externality_ms
-            - baseline_metrics.hit_externality_ms
+        direct_hit_delay_delta_ms=(
+            candidate_metrics.direct_hit_delay_ms - baseline_metrics.direct_hit_delay_ms
         ),
         target_launches_delta=(
             candidate_metrics.target_launches - baseline_metrics.target_launches

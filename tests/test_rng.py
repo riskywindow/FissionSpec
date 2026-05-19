@@ -101,6 +101,11 @@ class CounterRNGTests(unittest.TestCase):
             ],
         )
 
+    def test_provenance_is_stable_and_seed_separated(self) -> None:
+        self.assertEqual(CounterRNG("seed").provenance, CounterRNG("seed").provenance)
+        self.assertNotEqual(CounterRNG("seed").provenance, CounterRNG("other").provenance)
+        self.assertTrue(CounterRNG("seed").provenance.startswith("fissionspec-counter-rng-v1:"))
+
     def test_bernoulli_boundaries_and_threshold(self) -> None:
         rng = CounterRNG(123)
         for draw in range(100):

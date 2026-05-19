@@ -63,9 +63,7 @@ class TimingSample:
                 "target verifier_slots must be at least the number of batch rows"
             )
         if self.component != "target" and self.verifier_slots != 0:
-            raise CalibrationError(
-                "draft and recovery samples must set verifier_slots to zero"
-            )
+            raise CalibrationError("draft and recovery samples must set verifier_slots to zero")
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,9 +302,7 @@ def load_samples_csv(path: Path) -> tuple[TimingSample, ...]:
         for line_number, row in enumerate(reader, start=2):
             try:
                 if None in row:
-                    raise CalibrationError(
-                        f"too many fields at CSV line {line_number}"
-                    )
+                    raise CalibrationError(f"too many fields at CSV line {line_number}")
                 raw_component = _csv_cell(row, "component", line_number=line_number)
                 if raw_component not in _COMPONENTS:
                     raise CalibrationError(f"unknown component: {raw_component!r}")

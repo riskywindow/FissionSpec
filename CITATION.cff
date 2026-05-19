@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this artifact, please cite the repository and the upstream SSD work."
+title: "FissionSpec: Outcome-Decoupled Continuous Batching for Speculative-Speculative LLM Serving"
+type: software
+version: 0.1.0
+date-released: 2026-07-22
+license: Apache-2.0
+authors:
+  - name: "FissionSpec contributors"

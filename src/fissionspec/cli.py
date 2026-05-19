@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import sys
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import Path
 from typing import cast
 
@@ -40,10 +43,14 @@ _POLICY_NAMES = (
     "horizon-2",
 )
 
+_SIMULATION_WARNING = "SIMULATION MODEL OUTPUT — NOT AN END-TO-END GPU MEASUREMENT."
 
-def _add_simulation_arguments(
-    parser: argparse.ArgumentParser, *, include_policy: bool
-) -> None:
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non-standard JSON numeric constant is not allowed: {value}")
+
+
+def _add_simulation_arguments(parser: argparse.ArgumentParser, *, include_policy: bool) -> None:
     if include_policy:
         parser.add_argument("--policy", choices=_POLICY_NAMES, default="fissionspec")
         parser.add_argument(
@@ -92,12 +99,21 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_workload_json(path: Path) -> Workload:
-    """Load a workload from the documented dependency-free JSON format."""
-
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def _load_workload_document(path: Path) -> tuple[Workload, dict[str, object], str]:
+    serialized = path.read_bytes()
+    raw = json.loads(
+        serialized,
+        parse_constant=_reject_json_constant,
+    )
     if not isinstance(raw, dict) or not isinstance(raw.get("requests"), list):
         raise ValueError("workload JSON must contain a requests array")
+    schema_version = raw.get("schema_version")
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != 1
+    ):
+        raise ValueError("workload schema_version must be integer 1")
     requests = []
     for item in raw["requests"]:
         if not isinstance(item, dict):
@@ -109,9 +125,27 @@ def load_workload_json(path: Path) -> Workload:
         ):
             probability = values.get(field)
             if isinstance(probability, list):
+                if any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    for value in probability
+                ):
+                    raise ValueError(f"{field} arrays must contain only finite real numbers")
                 values[field] = tuple(float(value) for value in probability)
         requests.append(RequestConfig(**values))
-    return Workload(tuple(requests), name=str(raw.get("name", path.stem)))
+    name = raw.get("name", path.stem)
+    if not isinstance(name, str) or not name:
+        raise ValueError("workload name must be a non-empty string")
+    workload = Workload(tuple(requests), name=name)
+    return workload, raw, hashlib.sha256(serialized).hexdigest()
+
+
+def load_workload_json(path: Path) -> Workload:
+    """Load a versioned workload document with strict numeric types."""
+
+    workload, _, _ = _load_workload_document(path)
+    return workload
 
 
 def _curve(raw: object, field: str) -> LatencyCurve:
@@ -121,23 +155,56 @@ def _curve(raw: object, field: str) -> LatencyCurve:
     for point in raw:
         if not isinstance(point, list) or len(point) != 2:
             raise ValueError(f"invalid point in profile {field}")
-        points.append((int(point[0]), float(point[1])))
+        row, latency = point
+        if isinstance(row, bool) or not isinstance(row, int):
+            raise ValueError(f"profile {field} row counts must be integers")
+        if isinstance(latency, bool) or not isinstance(latency, (int, float)):
+            raise ValueError(f"profile {field} latencies must be real numbers")
+        points.append((row, float(latency)))
     return LatencyCurve(tuple(points))
 
 
-def load_profile_json(path: Path) -> HardwareProfile:
-    """Load measured target/draft curves from a JSON profile."""
-
-    raw = json.loads(path.read_text(encoding="utf-8"))
+def _load_profile_document(path: Path) -> tuple[HardwareProfile, dict[str, object], str]:
+    serialized = path.read_bytes()
+    raw = json.loads(serialized, parse_constant=_reject_json_constant)
     if not isinstance(raw, dict):
         raise ValueError("profile JSON must be an object")
-    return HardwareProfile(
+    schema_version = raw.get("schema_version")
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version != 1
+    ):
+        raise ValueError("profile schema_version must be integer 1")
+    if not isinstance(raw.get("provenance"), dict):
+        raise ValueError("profile provenance must be an object")
+    fit = raw.get("fit")
+    if fit is not None and not isinstance(fit, dict):
+        raise ValueError("profile fit diagnostics must be an object when supplied")
+    name = raw.get("name", path.stem)
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("profile name must be a non-empty string")
+    verifier_slot_ms = raw.get("verifier_slot_ms", 0.0)
+    if isinstance(verifier_slot_ms, bool) or not isinstance(verifier_slot_ms, (int, float)):
+        raise ValueError("profile verifier_slot_ms must be a real number")
+    for curve_name in ("target_curve", "draft_curve", "recovery_curve"):
+        if curve_name not in raw:
+            raise ValueError(f"profile is missing {curve_name}")
+    profile = HardwareProfile(
         target_curve=_curve(raw["target_curve"], "target_curve"),
         draft_curve=_curve(raw["draft_curve"], "draft_curve"),
         recovery_curve=_curve(raw["recovery_curve"], "recovery_curve"),
-        verifier_slot_ms=float(raw.get("verifier_slot_ms", 0.0)),
-        name=str(raw.get("name", path.stem)),
+        verifier_slot_ms=float(verifier_slot_ms),
+        name=name.strip(),
     )
+    return profile, raw, hashlib.sha256(serialized).hexdigest()
+
+
+def load_profile_json(path: Path) -> HardwareProfile:
+    """Load a versioned, provenance-bearing latency profile document."""
+
+    profile, _, _ = _load_profile_document(path)
+    return profile
 
 
 def _theory_output(batch_size: int, hit_rate: float) -> dict[str, float | int]:
@@ -152,9 +219,7 @@ def _theory_output(batch_size: int, hit_rate: float) -> dict[str, float | int]:
         "expected_barrier_stalled_rows": batch_size * fallback,
         "expected_fission_stalled_rows": batch_size * (1.0 - hit_rate),
         "head_of_line_amplification": head_of_line_amplification(probabilities),
-        "expected_collateral_hit_stalls": expected_collateral_hit_stalls(
-            probabilities
-        ),
+        "expected_collateral_hit_stalls": expected_collateral_hit_stalls(probabilities),
     }
 
 
@@ -164,11 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     # Preserve the original flat simulation interface for existing experiment
     # scripts while making the explicit subcommands the documented surface.
-    if (
-        arguments
-        and arguments[0].startswith("-")
-        and arguments[0] not in {"-h", "--help"}
-    ):
+    if arguments and arguments[0].startswith("-") and arguments[0] not in {"-h", "--help"}:
         arguments.insert(0, "simulate")
     args = _parser().parse_args(arguments)
     if args.command == "theory":
@@ -181,10 +242,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    workload = (
-        load_workload_json(args.workload_json)
-        if args.workload_json is not None
-        else Workload.homogeneous(
+    workload_document: dict[str, object] | None = None
+    workload_sha256: str | None = None
+    if args.workload_json is not None:
+        workload, workload_document, workload_sha256 = _load_workload_document(args.workload_json)
+    else:
+        workload = Workload.homogeneous(
             args.requests,
             arrival_interval_ms=args.arrival_interval_ms,
             output_tokens=args.output_tokens,
@@ -193,16 +256,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             token_acceptance_probability=args.token_acceptance_probability,
             tbt_slo_ms=args.tbt_slo_ms,
         )
-    )
-    profile = (
-        load_profile_json(args.profile_json)
-        if args.profile_json is not None
-        else HardwareProfile()
-    )
+    profile_document: dict[str, object] | None = None
+    profile_sha256: str | None = None
+    if args.profile_json is not None:
+        profile, profile_document, profile_sha256 = _load_profile_document(args.profile_json)
+    else:
+        profile = HardwareProfile()
     compare_all = args.command == "sweep" or args.compare_all
     policy_names = _POLICIES if compare_all else (args.policy,)
     rng = cast(ScheduleIndependentRNG, CounterRNG(args.seed))
-    output: dict[str, object] = {}
+    policy_results: dict[str, object] = {}
     for policy_name in policy_names:
         policy = policy_from_name(
             policy_name,
@@ -216,7 +279,58 @@ def main(argv: Sequence[str] | None = None) -> int:
             rng,
             max_batch_size=args.max_batch_size,
         )
-        output[policy.name] = summarize(result).as_dict()
+        policy_results[policy.name] = summarize(result).as_dict()
+    output = {
+        "schema_version": 1,
+        "evidence_class": "simulation-model",
+        "measurement_warning": _SIMULATION_WARNING,
+        "seed": args.seed,
+        "profile": {
+            "name": profile.name,
+            "source": (
+                str(args.profile_json) if args.profile_json is not None else "built-in-synthetic"
+            ),
+            "target_curve": [list(point) for point in profile.target_curve.points],
+            "draft_curve": [list(point) for point in profile.draft_curve.points],
+            "recovery_curve": [list(point) for point in profile.recovery_curve.points],
+            "verifier_slot_ms": profile.verifier_slot_ms,
+            "source_document_sha256": profile_sha256,
+            "schema_version": (
+                profile_document.get("schema_version") if profile_document is not None else None
+            ),
+            "provenance": (
+                profile_document.get("provenance")
+                if profile_document is not None
+                else {
+                    "kind": "synthetic",
+                    "warning": _SIMULATION_WARNING,
+                }
+            ),
+            "fit": profile_document.get("fit") if profile_document is not None else None,
+        },
+        "workload": {
+            "name": workload.name,
+            "source": (
+                str(args.workload_json)
+                if args.workload_json is not None
+                else "generated-homogeneous"
+            ),
+            "source_document_sha256": workload_sha256,
+            "schema_version": (
+                workload_document.get("schema_version") if workload_document is not None else None
+            ),
+            "description": (
+                workload_document.get("description") if workload_document is not None else None
+            ),
+            "requests": [asdict(request) for request in workload],
+        },
+        "scheduler": {
+            "max_batch_size": args.max_batch_size,
+            "coalesce_ms": args.coalesce_ms,
+            "max_wait_ms": args.max_wait_ms,
+        },
+        "results": policy_results,
+    }
     print(json.dumps(output, indent=args.indent, sort_keys=True))
     return 0
 
