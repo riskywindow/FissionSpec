@@ -30,7 +30,8 @@ python tools/render_synthetic_results.py \
   experiments/results/synthetic_sweep.json
 ```
 
-The first command writes compact per-seed JSON and CSV. The second creates a
-dependency-free SVG and Markdown summary. Do not cite their performance
-numbers as hardware results; replace the synthetic latency profile with a
-calibrated, provenance-bearing GPU profile for any systems claim.
+The first command writes compact aggregate JSON and a hash-linked per-seed
+CSV. The second creates a dependency-free SVG and Markdown summary. Do not
+cite their performance numbers as hardware results; replace the synthetic
+latency profile with a calibrated, provenance-bearing GPU profile for any
+systems claim.

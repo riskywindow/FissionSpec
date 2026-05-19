@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import tempfile
 import unittest
@@ -99,6 +100,11 @@ class SyntheticSweepTests(unittest.TestCase):
                 csv_rows = list(csv.DictReader(handle))
             self.assertEqual(document["measurement_warning"], WARNING)
             self.assertEqual(document["profile"]["gpu_measurement"], False)
+            self.assertEqual(document["per_seed_rows"]["row_count"], len(csv_rows))
+            self.assertEqual(
+                document["per_seed_rows"]["sha256"],
+                hashlib.sha256(first_csv).hexdigest(),
+            )
             self.assertTrue(all(row["measurement_warning"] == WARNING for row in csv_rows))
 
             aggregates = load_aggregates(json_path)

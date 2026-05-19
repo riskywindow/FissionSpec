@@ -69,10 +69,7 @@ class SweepConfig:
     def __post_init__(self) -> None:
         if not self.seeds:
             raise ValueError("at least one seed is required")
-        if any(
-            isinstance(seed, bool) or not isinstance(seed, int)
-            for seed in self.seeds
-        ):
+        if any(isinstance(seed, bool) or not isinstance(seed, int) for seed in self.seeds):
             raise ValueError("seeds must be integers")
         if len(self.seeds) != len(set(self.seeds)):
             raise ValueError("seeds must be unique")
@@ -141,12 +138,8 @@ class SweepConfig:
                 cache_hit_probability=cache_probability,
                 token_acceptance_probability=token_probability,
             )
-            for cache_index, cache_probability in enumerate(
-                self.cache_hit_probabilities
-            )
-            for token_index, token_probability in enumerate(
-                self.token_acceptance_probabilities
-            )
+            for cache_index, cache_probability in enumerate(self.cache_hit_probabilities)
+            for token_index, token_probability in enumerate(self.token_acceptance_probabilities)
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -539,6 +532,7 @@ def _write_json(
     rows: list[ExperimentRow],
     aggregates: list[AggregateRow],
     fingerprints: list[dict[str, str | int]],
+    csv_sha256: str,
 ) -> None:
     document: dict[str, object] = {
         "schema_version": 2,
@@ -561,7 +555,12 @@ def _write_json(
         },
         "config": config.as_dict(),
         "outcome_key_fingerprints": fingerprints,
-        "rows": [row.as_dict() for row in rows],
+        "per_seed_rows": {
+            "format": "CSV",
+            "path": "synthetic_sweep.csv",
+            "row_count": len(rows),
+            "sha256": csv_sha256,
+        },
         "aggregates": [aggregate.as_dict() for aggregate in aggregates],
     }
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -594,8 +593,16 @@ def write_results(
     aggregates = aggregate_rows(rows, config)
     json_path = output_dir / "synthetic_sweep.json"
     csv_path = output_dir / "synthetic_sweep.csv"
-    _write_json(json_path, config, rows, aggregates, fingerprints)
     _write_csv(csv_path, rows)
+    csv_sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    _write_json(
+        json_path,
+        config,
+        rows,
+        aggregates,
+        fingerprints,
+        csv_sha256,
+    )
     return json_path, csv_path
 
 
