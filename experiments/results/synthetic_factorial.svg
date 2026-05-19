@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1202" height="439" viewBox="0 0 1202 439" role="img" aria-labelledby="title description">
+<title id="title">Synthetic FissionSpec throughput-ratio factorial</title>
+<description id="description">FissionSpec horizon-2 throughput divided by the Saguaro barrier under independently varied cache hit and token acceptance probabilities. Not GPU measurements.</description>
+<metadata>SYNTHETIC MODEL OUTPUT — NOT GPU MEASUREMENTS.</metadata>
+<rect width="100%" height="100%" fill="#fbfcfe"/>
+<text x="601.0" y="32" text-anchor="middle" font-family="system-ui,sans-serif" font-size="21" font-weight="700" fill="#111827">FissionSpec H2 throughput / Saguaro barrier</text>
+<text x="601.0" y="61" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" font-weight="700" fill="#b42318">SYNTHETIC MODEL OUTPUT — NOT GPU MEASUREMENTS.</text>
+<text x="207.0" y="96" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" font-weight="650" fill="#111827">synchronized-cohort</text>
+<text x="257.0" y="118" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#4b5563">configured cache-hit p</text>
+<text x="197.0" y="129" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.70</text>
+<text x="309.0" y="129" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.95</text>
+<text x="132" y="168" text-anchor="end" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.55</text>
+<text x="28" y="168" font-family="system-ui,sans-serif" font-size="11" fill="#4b5563">token p</text>
+<rect x="145" y="140" width="104" height="76" rx="5" fill="#c4d3f5" stroke="#d1d5db"/>
+<text x="197" y="172" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.001x</text>
+<text x="197" y="193" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<rect x="257" y="140" width="104" height="76" rx="5" fill="#c6d5f5" stroke="#d1d5db"/>
+<text x="309" y="172" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.001x</text>
+<text x="309" y="193" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<text x="132" y="260" text-anchor="end" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.90</text>
+<text x="28" y="260" font-family="system-ui,sans-serif" font-size="11" fill="#4b5563">token p</text>
+<rect x="145" y="232" width="104" height="76" rx="5" fill="#b6c9f4" stroke="#d1d5db"/>
+<text x="197" y="264" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.003x</text>
+<text x="197" y="285" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<rect x="257" y="232" width="104" height="76" rx="5" fill="#f2caca" stroke="#d1d5db"/>
+<text x="309" y="264" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">0.999x</text>
+<text x="309" y="285" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<text x="601.0" y="96" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" font-weight="650" fill="#111827">poisson</text>
+<text x="651.0" y="118" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#4b5563">configured cache-hit p</text>
+<text x="591.0" y="129" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.70</text>
+<text x="703.0" y="129" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.95</text>
+<text x="526" y="168" text-anchor="end" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.55</text>
+<text x="422" y="168" font-family="system-ui,sans-serif" font-size="11" fill="#4b5563">token p</text>
+<rect x="539" y="140" width="104" height="76" rx="5" fill="#6892ef" stroke="#d1d5db"/>
+<text x="591" y="172" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#ffffff">1.010x</text>
+<text x="591" y="193" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#ffffff">P95 delta +0.00 ms</text>
+<rect x="651" y="140" width="104" height="76" rx="5" fill="#9ab6f2" stroke="#d1d5db"/>
+<text x="703" y="172" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.005x</text>
+<text x="703" y="193" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<text x="526" y="260" text-anchor="end" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.90</text>
+<text x="422" y="260" font-family="system-ui,sans-serif" font-size="11" fill="#4b5563">token p</text>
+<rect x="539" y="232" width="104" height="76" rx="5" fill="#8cacf1" stroke="#d1d5db"/>
+<text x="591" y="264" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.006x</text>
+<text x="591" y="285" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta -0.00 ms</text>
+<rect x="651" y="232" width="104" height="76" rx="5" fill="#8dacf1" stroke="#d1d5db"/>
+<text x="703" y="264" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.006x</text>
+<text x="703" y="285" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<text x="995.0" y="96" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" font-weight="650" fill="#111827">bursty</text>
+<text x="1045.0" y="118" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#4b5563">configured cache-hit p</text>
+<text x="985.0" y="129" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.70</text>
+<text x="1097.0" y="129" text-anchor="middle" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.95</text>
+<text x="920" y="168" text-anchor="end" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.55</text>
+<text x="816" y="168" font-family="system-ui,sans-serif" font-size="11" fill="#4b5563">token p</text>
+<rect x="933" y="140" width="104" height="76" rx="5" fill="#86a8f1" stroke="#d1d5db"/>
+<text x="985" y="172" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.007x</text>
+<text x="985" y="193" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<rect x="1045" y="140" width="104" height="76" rx="5" fill="#91b0f2" stroke="#d1d5db"/>
+<text x="1097" y="172" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#111827">1.006x</text>
+<text x="1097" y="193" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#111827">P95 delta +0.00 ms</text>
+<text x="920" y="260" text-anchor="end" font-family="ui-monospace,monospace" font-size="12" fill="#374151">0.90</text>
+<text x="816" y="260" font-family="system-ui,sans-serif" font-size="11" fill="#4b5563">token p</text>
+<rect x="933" y="232" width="104" height="76" rx="5" fill="#3a72ec" stroke="#d1d5db"/>
+<text x="985" y="264" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#ffffff">1.014x</text>
+<text x="985" y="285" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#ffffff">P95 delta +0.00 ms</text>
+<rect x="1045" y="232" width="104" height="76" rx="5" fill="#5d8bee" stroke="#d1d5db"/>
+<text x="1097" y="264" text-anchor="middle" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#ffffff">1.011x</text>
+<text x="1097" y="285" text-anchor="middle" font-family="ui-monospace,monospace" font-size="10" fill="#ffffff">P95 delta +0.00 ms</text>
+<text x="601.0" y="356" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#374151">Blue: faster than barrier. Red: slower. Cells show matched-seed mean synthetic throughput ratio.</text>
+</svg>
