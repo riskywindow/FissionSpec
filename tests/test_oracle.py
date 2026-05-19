@@ -103,6 +103,51 @@ class OfflineOracleTests(unittest.TestCase):
             aggregate_request_flow_time_ms(first.best_result),
         )
 
+    def test_wait_commitment_ignores_stale_non_readiness_events(self) -> None:
+        profile = HardwareProfile(
+            target_curve=LatencyCurve(((1, 1.0), (2, 1.25))),
+            # The first precompute completion at t=2 becomes stale after the
+            # miss starts recovery.  It must not create a dispatch choice
+            # between a wait at t=1 and the actual recovery readiness at t=3.
+            draft_curve=LatencyCurve(((1, 2.0), (2, 2.1))),
+            recovery_curve=LatencyCurve(((1, 1.0), (2, 1.1))),
+            verifier_slot_ms=0.0,
+            name="stale-event-test",
+        )
+        workload = Workload(
+            (
+                RequestConfig(
+                    request_id="miss",
+                    arrival_ms=0.0,
+                    output_tokens=2,
+                    speculation_length=2,
+                    cache_hit_probability=0.0,
+                    token_acceptance_probability=0.0,
+                ),
+                RequestConfig(
+                    request_id="arrival",
+                    arrival_ms=1.0,
+                    output_tokens=1,
+                    speculation_length=1,
+                    cache_hit_probability=1.0,
+                    token_acceptance_probability=1.0,
+                ),
+            )
+        )
+
+        solved = offline_coalescing_oracle(
+            workload,
+            profile,
+            CounterRNG(4),
+            max_batch_size=2,
+            max_decision_depth=3,
+            max_simulations=8,
+        )
+
+        self.assertEqual(solved.nodes, 5)
+        self.assertEqual(solved.leaves, 3)
+        self.assertEqual(solved.max_depth, 2)
+
     def test_decision_depth_limit_fails_instead_of_approximating(self) -> None:
         with self.assertRaises(OracleLimitExceeded) as raised:
             offline_coalescing_oracle(

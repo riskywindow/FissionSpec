@@ -99,6 +99,7 @@ class _DecisionRequired(RuntimeError):
 class _PrefixPolicy:
     """Replay one adaptive branch prefix under pure fission semantics."""
 
+    _EPSILON = 1e-12
     name = "offline-fission-oracle"
     barrier_on_miss = False
     pad_recovering_misses = False
@@ -106,6 +107,7 @@ class _PrefixPolicy:
     def __init__(self, action_prefix: tuple[OracleAction, ...]) -> None:
         self.action_prefix = action_prefix
         self.consumed_actions = 0
+        self._committed_wait_until_ms: float | None = None
 
     @staticmethod
     def _has_wait_branch(context: DispatchContext) -> bool:
@@ -118,6 +120,15 @@ class _PrefixPolicy:
         )
 
     def dispatch_at(self, context: DispatchContext) -> float:
+        # Simulator events that cannot make a row ready (for example, a stale
+        # precompute completion) may still trigger policy evaluation.  A wait
+        # action commits through those events; it is not an invitation to
+        # dispatch at an arbitrary intermediate timestamp.
+        if self._committed_wait_until_ms is not None:
+            if context.now_ms < self._committed_wait_until_ms - self._EPSILON:
+                return self._committed_wait_until_ms
+            self._committed_wait_until_ms = None
+
         if not self._has_wait_branch(context):
             return context.now_ms
         if self.consumed_actions == len(self.action_prefix):
@@ -131,6 +142,7 @@ class _PrefixPolicy:
             next_time = context.next_ready_time_ms
             if next_time is None:  # pragma: no cover - guarded above
                 raise OracleReplayMismatch("wait action has no next readiness")
+            self._committed_wait_until_ms = next_time
             return next_time
         raise OracleReplayMismatch(f"unknown oracle action: {action!r}")
 
