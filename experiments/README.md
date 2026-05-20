@@ -51,3 +51,19 @@ Regenerate both the factorial and the controller decision surface with:
 ```bash
 make artifacts
 ```
+
+The finite pre-accelerator study is broader than this original smoke sweep. It
+uses 12 predeclared screening cells, 30 independent paired clusters per cell,
+six workload families, two explicitly non-comparable policy harnesses, a
+one-round fidelity companion, six independently verified exact scheduling
+certificates, and complete hash-linked traces:
+
+```bash
+PYTHONPATH=src python experiments/run_cpu_completion_study.py --mode full
+PYTHONPATH=src python experiments/run_cpu_completion_study.py \
+  --verify-only experiments/results/cpu_completion_full
+```
+
+The checked-in bundle and its mixed/negative findings are documented in
+[`docs/cpu_completion_study.md`](../docs/cpu_completion_study.md). It is still
+simulation-model evidence, not a GPU benchmark.

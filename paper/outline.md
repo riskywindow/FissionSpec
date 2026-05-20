@@ -84,10 +84,13 @@ size, EDF admission, and a hard coalescing bound. Future external arrivals are
 hidden. After a first token exists, it never knowingly waits past the earliest
 selected-row TBT slack. The Rust primitive supports priority-weighted flow over
 a one-dimensional flattened-work profile; it is not a differential port of the
-Python two-dimensional model. A restricted offline oracle exhausts only binary
-dispatch-now versus wait-to-next-readiness choices under the simulator's fixed
-deadline-first admission order. It does not optimize arbitrary subsets,
-orderings, or wait durations.
+Python two-dimensional model. Two offline oracles are kept distinct: the
+original restricted oracle exhausts binary dispatch-now versus
+wait-to-next-readiness choices, while the generalized oracle searches arbitrary
+admissible subsets and orderings at release-time wait points under exact
+rational row/slot capacities, deadlines, weights, and latency. Independent
+brute force verifies each generalized certificate. It is still a bounded
+one-shot scheduler, not a multi-round serving optimum.
 
 ## 4. Correctness obligations
 
@@ -109,15 +112,18 @@ obligations because real kernels add floating-point and block-table behavior.
 Saguaro (neural and fast fallback), full SPECTRE (ordinary/parallel/hybrid), its
 parallel padded-mode component, immediate fission, fixed coalescing,
 EXSpec-style grouping, a myopic slack controller, the horizon-2 controller, and
-the restricted small-trace coalescing oracle. End-to-end context
-also includes vLLM/SGLang autoregressive, ordinary SD, EAGLE-3, FASER,
-MineDraft, PEARL/AMUSD, SwiftSpec, SpecBranch, TETRIS, and TurboSpec where
-artifacts and model pairs permit a matched comparison.
+both exact small-trace oracles. End-to-end context also includes vLLM/SGLang
+autoregressive, ordinary SD, EAGLE-3, FASER, WISP, MineDraft, PEARL/AMUSD,
+SwiftSpec, SpecBranch, TETRIS, and TurboSpec where artifacts and model pairs
+permit a matched comparison. WISP is a heterogeneous ordinary-verification
+scheduler rather than an SSD outcome-cache policy, so any comparison must keep
+that mechanism boundary visible.
 
 ### Workloads
 
 - One miss plus `B-1` hits (mechanism isolation).
-- Poisson, bursty, and production-trace arrivals.
+- Synchronized, Poisson, exact continuous-time MMPP, finite-mean Pareto,
+  heterogeneous, and byte-hashed replay arrivals.
 - Batch/concurrency 1–128; temperature 0, 0.6, 1.0.
 - Heterogeneous context/output lengths and correlated hit classes.
 - Draft contention and network-jitter sweeps.
@@ -143,13 +149,15 @@ it more expensive. Batch reordering can change floating-point reductions even
 when the target distribution is algorithmically preserved. Every reported GPU
 result must match total target and draft resources.
 
-The laptop artifact's `spectre-parallel-padded` policy is a component ablation,
-not the full hybrid SPECTRE baseline. Its draft server is a non-preemptive FIFO,
-arrivals are decode-ready after prefill/initial proposal, and TBT excludes TTFT.
-Cache-hit probability is exogenous at fixed row-based precompute cost: outcome
-fanout, context length, cache memory, and their joint dependence on token
-acceptance are omitted. None of those model outputs may be presented as an
-end-to-end systems result.
+The original laptop simulator's `spectre-parallel-padded` policy is a component
+ablation, not the full hybrid SPECTRE baseline. Its draft server is a
+non-preemptive FIFO, arrivals are decode-ready after prefill/initial proposal,
+and TBT excludes TTFT. A separate pre-realized scheduler harness now provides
+explicit SPECTRE-hybrid, EXSpec, and myopic abstractions, and a separate
+one-round fidelity harness models cache fanout/capacity, context, TTFT,
+multiworker remote service, transport, retry, and backpressure. Those three
+evidence strata are intentionally non-comparable. None of their model outputs
+may be presented as an end-to-end systems result.
 
 The working bibliography is in [`references.bib`](references.bib); literature
 claims remain pinned to the dated boundary in `docs/novelty.md`.
