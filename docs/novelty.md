@@ -1,4 +1,4 @@
-# Novelty boundary (dated 2026-07-22)
+# Novelty boundary (dated 2026-07-23)
 
 This file is intentionally blunt. It records what FissionSpec may and may not
 claim as the literature changes.
@@ -29,6 +29,7 @@ machinery, not independent novelty claims.
 | [SpecBranch](https://arxiv.org/html/2506.01979) | Branch parallelism and rollback-aware reuse | It lowers rollback probability; FissionSpec schedules the divergent readiness after an outcome. |
 | [TAPER](https://arxiv.org/abs/2605.06914) | SLO-aware regulation of branch parallelism | It controls branch admission, not post-outcome recovery lanes. |
 | [TurboSpec / SmartSpec](https://arxiv.org/html/2406.14066) | Load-aware speculation length and goodput control | It does not decouple requests after SSD outcome-cache lookup. |
+| [WISP](https://arxiv.org/html/2601.11652) | SLO-aware scheduling of heterogeneous ordinary-SD verification requests and verification-interference modeling | It schedules complete requests before verification, not realized SSD continuation-cache outcomes after verification. |
 | [TransKV](https://doi.org/10.36227/techrxiv.177101038.80960856/v1) | Committed versus packed provisional KV state | FissionSpec uses versioned transactions as a scheduling substrate. |
 
 ## Claims to avoid

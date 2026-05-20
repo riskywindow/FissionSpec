@@ -138,8 +138,12 @@ draft/verification frontiers per request. [SwiftSpec](https://arxiv.org/abs/2506
 disaggregates asynchronous speculation and repairs tree KV state.
 [TAPER](https://arxiv.org/abs/2605.06914) regulates branch externality against
 batch slack. [TurboSpec](https://arxiv.org/abs/2406.14066) controls speculative
-parallelism for runtime goodput. TransKV separates committed and provisional
-paged KV.
+parallelism for runtime goodput. [WISP](https://arxiv.org/abs/2601.11652)
+schedules heterogeneous ordinary-SD verification requests against SLO slack
+and models verification interference. An
+[interpretable serving model](https://arxiv.org/abs/2605.15051) decomposes
+load-dependent prefill, draft, and verification demand. TransKV separates
+committed and provisional paged KV.
 
 None of those mechanisms is claimed as new. The prospective claim is the
 combination of post-outcome, per-request target-row removal and bounded
