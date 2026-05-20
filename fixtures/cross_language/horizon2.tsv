@@ -1,0 +1,10 @@
+# Flattened horizon-2 fixtures. All times are integer nanoseconds, every row
+# has unit width and normal priority, now/original current arrival is zero,
+# there is no arithmetic overflow, and current+forecast always fits capacity.
+case	points_ns	current_count	forecast_count	forecast_at_ns	capacity	max_wait_ns	current_deadline_ns	future_deadline_ns	expected_action
+fusion_lower_cost	1:100;2:115	1	1	10	2	50	1000	1000	wait
+launch_lower_cost	1:100;2:250	1	1	10	2	50	1000	1000	dispatch
+cost_tie_dispatches	1:100;2:100	1	1	50	2	100	1000	1000	dispatch
+no_forecast	1:100;2:115	1	0	-	2	50	1000	-	dispatch
+fusion_misses_current_deadline	1:100;2:115	1	1	10	2	50	120	1000	dispatch
+fusion_only_feasible	1:100;2:115	1	1	10	2	50	1000	150	wait

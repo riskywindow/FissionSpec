@@ -1,0 +1,12 @@
+# Canonical 1-D latency fixtures. Time is integer nanoseconds.
+# The subset requires a first knot at one unit, at least two knots, positive
+# query units, and integral interpolation/extrapolation results.
+case	points_ns	query_units	expected_ns
+linear_inside	1:100;3:140	2	120
+linear_right_knot	1:100;3:140	3	140
+linear_extrapolation	1:100;3:140	5	180
+plateau	1:50;2:50;4:70	2	50
+post_plateau_interpolation	1:50;2:50;4:70	3	60
+post_plateau_extrapolation	1:50;2:50;4:70	6	90
+multi_segment_interpolation	1:10;4:40;6:44	5	42
+multi_segment_extrapolation	1:10;4:40;6:44	8	48

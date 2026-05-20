@@ -1,0 +1,8 @@
+# Canonical cross-language analytical miss fixtures.
+# Probabilities are miss probabilities. Expected values are hand-audited.
+case	miss_probabilities	survival_probability	batch_miss_probability	hol_amplification	expected_healthy_victims	tolerance
+two_homogeneous_tenths	0.1,0.1	0.81	0.19	1.9	0.18	1e-12
+heterogeneous_with_zero	0.2,0.5,0.0	0.4	0.6	2.5714285714285714286	1.1	1e-12
+certain_peer_miss	1.0,0.2	0.0	1.0	1.6666666666666666667	0.8	1e-12
+all_hits	0.0,0.0,0.0	1.0	0.0	1.0	0.0	1e-12
+single_quarter_miss	0.25	0.75	0.25	1.0	0.0	1e-12

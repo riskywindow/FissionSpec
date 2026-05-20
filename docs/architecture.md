@@ -129,8 +129,11 @@ two-dimensional `target_latency_ms(rows, slots)` surface. Rust accepts a single
 priority-weighted flow plus bypass reasons without allocation. An integration
 may map `service_units` to verifier slots only after fixing a row/CUDA-graph
 bucket; otherwise it must retain a two-dimensional engine profile. Claims of
-bit-for-bit Python/Rust equivalence would require golden fixtures that are not
-part of this artifact.
+general bit-for-bit Python/Rust equivalence remain out of scope. The artifact
+does include independently consumed golden fixtures for the deliberately
+narrow common subset—miss algebra, integral one-dimensional latency cases,
+unit-width/no-overflow horizon-2 decisions, and version fences—documented in
+`docs/cross_language_contract.md`.
 
 ## Simulator boundary
 
@@ -141,8 +144,11 @@ batching remote server. TBT counts zero gaps within a block returned by one
 verification and excludes TTFT. These choices make the mechanism falsifiable;
 they do not constitute end-to-end serving evidence.
 
-The model takes cache-hit probability as exogenous and charges precomputation
-by request rows. It does not model outcome-tree fanout, context length, cache
-memory, or a conditional cache-hit/acceptance joint distribution. Those belong
-in calibrated traces or the production experiment; the bundled factorial keeps
-cache membership and token acceptance independent to isolate the scheduler.
+The reference policy model takes cache-hit probability as exogenous and charges
+precomputation by request rows. Its bundled factorial keeps cache membership
+and token acceptance independent to isolate the scheduler. The separate
+one-round fidelity layer adds finite outcome-tree fanout/LRU memory,
+context-dependent costs, correlated request classes, heterogeneous TTFT, and a
+causal multiworker remote service. It is a companion mechanism trace, not a
+silent replacement for the multi-round policy simulator or a production
+experiment.

@@ -1,0 +1,10 @@
+# Inputs both implementations reject inside the supported parity subset.
+case	subsystem	payload
+negative_probability	metrics	-0.1,0.2
+probability_over_one	metrics	0.2,1.1
+nonfinite_probability	metrics	nan
+empty_latency_profile	latency	-
+duplicate_latency_units	latency	1:10;1:20
+decreasing_latency	latency	1:20;2:10
+zero_batch_capacity	horizon2	capacity=0
+zero_service_width	horizon2	service_units=0

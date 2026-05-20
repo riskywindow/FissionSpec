@@ -1,0 +1,8 @@
+# Canonical version-fence traces. The current epoch is one. "prepare" creates
+# a one-block private branch; commit selects it; abort is idempotent.
+case	actions	expected_results	expected_state
+prepare_then_commit	prepare:1;commit:1	ok;ok	committed
+stale_prepare_is_inert	prepare:2;prepare:1;commit:1	error;ok;ok	committed
+stale_commit_is_inert	prepare:1;commit:2;commit:1	ok;error;ok	committed
+abort_replay_is_idempotent	prepare:1;abort:1;abort:1	ok;ok;ok	aborted
+commit_is_terminal	prepare:1;commit:1;commit:1	ok;ok;error	committed
