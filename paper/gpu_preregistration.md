@@ -92,6 +92,24 @@ pairs. Offered load is expressed as fractions of the target-only saturation
 rate measured in Stage 1: `0.35`, `0.70`, `0.90`, and `1.05`. The last point is
 an overload stress test, not part of the primary SLO claim.
 
+Those axes are not a confirmatory Cartesian product. To bound accelerator
+spend, the primary family contains exactly three validation anchors per model
+pair:
+
+| Anchor | Arrival process | Prompt/output | Temperature | Load |
+|---|---|---:|---:|---:|
+| V1 | held-out MMPP | `(128, 32)` | `0.6` | `0.70` |
+| V2 | held-out finite-mean Pareto | `(16K, 256)` | `1.0` | `0.90` |
+| V3 | byte-hashed public replay with its recorded heterogeneous shapes | trace class | `0` | replay rescaled to `0.70` |
+
+The medium context, low-load, overload, and remaining temperature combinations
+are registered robustness cells, not primary hypotheses. They are purchased
+only after the three anchors pass and are limited to twelve deterministic
+farthest-point cells across the complete robustness grid. Development traces
+may exercise the entire grid on CPU but cannot replace or tune these validation
+anchors. Exact replay/configuration hashes are inserted into the frozen run
+manifest before Stage 1 and cannot be selected from GPU outcomes.
+
 ## 5. Metrics and experimental unit
 
 The independent experimental unit is one complete seed/trace replay, not a
@@ -161,6 +179,22 @@ The executable ordering of these overlapping boundaries is frozen in
 Power planning uses the paired pilot variance but never its observed mean.
 Recommended replication is computed for standardized effects `0.3`, `0.5`, and
 `0.8`; the sequential maximum remains `50`.
+
+Every replay yields all four primary metrics, so metrics do not multiply the
+number of accelerator executions. For the primary candidate-versus-SPECTRE
+comparison, the hard cap is:
+
+```text
+2 model pairs * 3 validation anchors * 50 blocks * 4 ABBA/BAAB runs
+= 1,200 complete policy replays
+```
+
+The first possible family stop is 240 replays. Required non-confirmatory
+ablations use ten paired seeds per anchor, reuse an identical candidate replay
+when its complete environment hash matches, and do not trigger additional
+adaptive looks. The optional robustness surface is capped at the twelve cells
+above. A run orchestrator must reject a manifest that exceeds these counts;
+wall-time and GPU-hour caps are filled from Stage 1 calibration before Stage 2.
 
 ## 7. Stage 0 — zero-GPU release gate
 

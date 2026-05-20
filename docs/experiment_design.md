@@ -50,6 +50,12 @@ Stopping is applied to a complete multiplicity family by the experiment
 orchestrator. `evaluate_sequential_gate` evaluates one already-paired cell and
 does not silently remove failed or incomplete pairs.
 
+`ExperimentSpendCaps` rejects a generated run manifest above the registered
+hard limits: 1,200 primary replays, 300 unique ten-seed ablation replays, and
+twelve optional robustness cells. The first primary family look occurs after
+240 replays. All four primary metrics are derived from each replay and do not
+multiply that count.
+
 ## Calibration refinement
 
 For each verification width, Stage 1 initially measures rows 1, 8, and 32. The

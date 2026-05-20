@@ -4,6 +4,7 @@ import unittest
 
 from fissionspec.experiment_design import (
     DesignCell,
+    ExperimentSpendCaps,
     GateStatus,
     SequentialGateConfig,
     calibration_refinement_plan,
@@ -139,6 +140,38 @@ class SequentialGateTests(unittest.TestCase):
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 SequentialGateConfig(**kwargs)
+
+
+class SpendCapTests(unittest.TestCase):
+    def test_registered_replay_caps_are_exact_and_enforced(self) -> None:
+        caps = ExperimentSpendCaps()
+        self.assertEqual(caps.minimum_primary_replays, 240)
+        self.assertEqual(caps.maximum_primary_replays, 1200)
+        self.assertEqual(caps.maximum_unique_ablation_replays, 300)
+        caps.validate_manifest_counts(
+            primary_replays=1200,
+            unique_ablation_replays=300,
+            robustness_cells=12,
+        )
+        for counts in (
+            {
+                "primary_replays": 1201,
+                "unique_ablation_replays": 300,
+                "robustness_cells": 12,
+            },
+            {
+                "primary_replays": 1200,
+                "unique_ablation_replays": 301,
+                "robustness_cells": 12,
+            },
+            {
+                "primary_replays": 1200,
+                "unique_ablation_replays": 300,
+                "robustness_cells": 13,
+            },
+        ):
+            with self.subTest(counts=counts), self.assertRaises(ValueError):
+                caps.validate_manifest_counts(**counts)
 
 
 class CalibrationDesignTests(unittest.TestCase):

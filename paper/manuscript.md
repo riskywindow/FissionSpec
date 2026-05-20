@@ -319,6 +319,13 @@ Inductively, one speculative step has target next-token law by standard
 rejection/residual decomposition; conditioning on its committed emitted prefix
 and applying the hypothesis to the remaining horizon completes the argument.
 
+A separate no-download CPU fixture initializes independent tiny recurrent
+target and draft networks, evaluates their logits and stable softmax, then
+quantizes each finite-context row to exact integer mass. It exercises 36 exact
+distribution and 36 greedy cases across prompts, horizons, and widths. This
+tests the neural-logit-to-speculation seam without treating the micro-model as
+a transformer or a production-numerics result.
+
 ### 5.2 Schedule-independent randomness
 
 Every draw is a pure function of
@@ -439,10 +446,12 @@ headline efficacy.
 
 ### 8.1 Semantic and state evidence
 
-At commit `560f4f5`, the suite contains:
+The checked-in suite contains:
 
 - exact distribution equality over hand-built and deterministically randomized
   two/three-token autoregressive models, multiple horizons and widths;
+- a randomly initialized recurrent CPU micro-model converted from logits to an
+  exact finite-context distribution without downloaded weights;
 - greedy target/speculative equality and per-round committed-state
   reconstruction;
 - schedule-order and eager-cache completion-order invariance;
@@ -612,6 +621,7 @@ procedure RESTORE(snapshot):
 | Obligation | Executable source |
 |---|---|
 | Exact token law | `src/fissionspec/semantics.py` |
+| Neural CPU smoke fixture | `src/fissionspec/micro_model.py` |
 | Joint miss theory | `src/fissionspec/theory.py` |
 | Event scheduling | `src/fissionspec/simulator.py` |
 | Horizon-2 policy | `src/fissionspec/policies.py` |

@@ -22,6 +22,7 @@ agent framework. It contains:
 
 - a dependency-free, deterministic discrete-event simulator for online SSD;
 - an exact rational token-level speculative-sampling oracle for tiny CPU models;
+- a deterministic, randomly initialized no-download neural micro-model fixture;
 - a Saguaro barrier baseline and a labeled SPECTRE parallel-mode component;
 - immediate-fission, fixed-coalescing, and horizon-2 FissionSpec policies;
 - an exact restricted small-trace binary-coalescing oracle;
@@ -146,7 +147,8 @@ matches the target distribution for tiny rational autoregressive models.
 Production-kernel numerical parity remains an integration acceptance gate. See
 [docs/architecture.md](docs/architecture.md) for the state machine and engine
 boundary, and [docs/token_semantics.md](docs/token_semantics.md) for the exact
-semantic contract.
+semantic contract. The neural-to-exact CPU smoke seam is documented in
+[docs/micro_model.md](docs/micro_model.md).
 
 ## Artifact status
 

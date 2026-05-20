@@ -131,6 +131,82 @@ class SequentialGateDecision:
     rule: str
 
 
+@dataclass(frozen=True, slots=True)
+class ExperimentSpendCaps:
+    """Hard replay-count caps for the registered accelerator campaign."""
+
+    model_pairs: int = 2
+    validation_anchors: int = 3
+    minimum_blocks: int = 10
+    maximum_blocks: int = 50
+    runs_per_block: int = 4
+    ablation_seeds: int = 10
+    ablation_policies_including_candidate: int = 5
+    robustness_cells: int = 12
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "model_pairs",
+            "validation_anchors",
+            "minimum_blocks",
+            "maximum_blocks",
+            "runs_per_block",
+            "ablation_seeds",
+            "ablation_policies_including_candidate",
+            "robustness_cells",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{field_name} must be a positive integer")
+        if self.minimum_blocks > self.maximum_blocks:
+            raise ValueError("minimum_blocks must not exceed maximum_blocks")
+
+    @property
+    def minimum_primary_replays(self) -> int:
+        return (
+            self.model_pairs * self.validation_anchors * self.minimum_blocks * self.runs_per_block
+        )
+
+    @property
+    def maximum_primary_replays(self) -> int:
+        return (
+            self.model_pairs * self.validation_anchors * self.maximum_blocks * self.runs_per_block
+        )
+
+    @property
+    def maximum_unique_ablation_replays(self) -> int:
+        return (
+            self.model_pairs
+            * self.validation_anchors
+            * self.ablation_seeds
+            * self.ablation_policies_including_candidate
+        )
+
+    def validate_manifest_counts(
+        self,
+        *,
+        primary_replays: int,
+        unique_ablation_replays: int,
+        robustness_cells: int,
+    ) -> None:
+        """Reject a run manifest that can exceed any frozen spend boundary."""
+
+        values = {
+            "primary_replays": primary_replays,
+            "unique_ablation_replays": unique_ablation_replays,
+            "robustness_cells": robustness_cells,
+        }
+        for field_name, value in values.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if primary_replays > self.maximum_primary_replays:
+            raise ValueError("primary replay count exceeds the registered maximum")
+        if unique_ablation_replays > self.maximum_unique_ablation_replays:
+            raise ValueError("ablation replay count exceeds the registered maximum")
+        if robustness_cells > self.robustness_cells:
+            raise ValueError("robustness cell count exceeds the registered maximum")
+
+
 def evaluate_sequential_gate(
     improvements: Sequence[float],
     config: SequentialGateConfig | None = None,
@@ -383,6 +459,7 @@ def select_farthest_cells(
 __all__ = [
     "CalibrationRefinement",
     "DesignCell",
+    "ExperimentSpendCaps",
     "GateStatus",
     "MetricDirection",
     "SequentialGateConfig",
