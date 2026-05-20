@@ -23,7 +23,7 @@ finite-domain results, and GPU measurements are distinct evidence classes.
 | C11 | FissionSpec improves production serving goodput or tail latency. | No accelerator evidence. | Do not claim. | Pre-registered H100 matched-resource confirmatory study; B200 only for transport. |
 | C12 | FissionSpec is sampling-lossless on real models. | Exact finite CPU oracle only. | “Algorithmically exact in the finite rational oracle.” | Frozen real-model greedy equality and sampled distribution family under production kernels. |
 | C13 | FissionSpec is the first outcome-decoupled zero-padding SSD batch scheduler. | Dated primary-literature matrix; prospective gap. | “To our knowledge at the 2026-07-23 cutoff, the reviewed systems do not combine the listed five properties.” | Repeat search before submission/rebuttal; weaken immediately if overlapping work appears. |
-| C14 | CPU preparation minimizes GPU expenditure. | Spend-gated preregistration, deterministic replay/hashes, sequential confidence bounds and stop rules. | “The protocol is designed to stop before broad GPU evaluation when physical feasibility, mechanism, or controller-transport gates fail.” | Actual spend ledger after execution. |
+| C14 | CPU preparation minimizes GPU expenditure. | Spend-gated preregistration, deterministic replay/hashes, sequential confidence bounds, hard replay caps, and an append-only campaign ledger that authorizes only the next stage. | “The protocol and reference ledger are designed to leave zero later-stage authorization when physical feasibility, mechanism, or controller-transport fails.” | Actual resource ledger after execution. |
 
 ## Headline admission rule
 

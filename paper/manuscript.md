@@ -442,6 +442,11 @@ positive-but-below-minimum-worthwhile-effect rules. The executable rule
 ordering prevents overlapping interval boundaries from being reported as
 headline efficacy.
 
+An append-only campaign ledger hash-locks the protocol, code, CPU artifact,
+and three validation traces. It authorizes only the immediate next stage under
+a sealed integer GPU-second and replay cap. Failed gates permanently set later
+authorization to zero.
+
 ## 8. CPU evidence
 
 ### 8.1 Semantic and state evidence
@@ -632,6 +637,7 @@ procedure RESTORE(snapshot):
 | Full trace artifacts | `src/fissionspec/artifacts.py` |
 | Workload generation/replay | `src/fissionspec/workload_generators.py` |
 | Paired inference | `src/fissionspec/statistics.py` |
+| Accelerator spend gate | `src/fissionspec/spend_gate.py` |
 | Rust hot path | `crates/fissionspec-core/` |
 | Engine seam | `integrations/sglang/`, `integrations/vllm/` |
 | Claim gates | `paper/claims_evidence.md` |

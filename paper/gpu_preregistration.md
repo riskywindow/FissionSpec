@@ -195,6 +195,9 @@ when its complete environment hash matches, and do not trigger additional
 adaptive looks. The optional robustness surface is capped at the twelve cells
 above. A run orchestrator must reject a manifest that exceeds these counts;
 wall-time and GPU-hour caps are filled from Stage 1 calibration before Stage 2.
+`fissionspec.spend_gate` enforces the stage order, hash-locked manifest, and
+one-stage-at-a-time GPU-second/replay authorization. A failed gate leaves zero
+later authorization.
 
 ## 7. Stage 0 — zero-GPU release gate
 
@@ -207,7 +210,8 @@ Do not rent hardware until all of these pass at the tagged commit:
 - simulator null-equivalence and conservation tests;
 - paired statistical pipeline and byte-reproducible full traces;
 - clean sdist/wheel/container reproduction; and
-- frozen integration patches and this protocol.
+- frozen integration patches and this protocol; and
+- a canonical campaign plan plus a passing zero-GPU `F0` ledger record.
 
 Any failure returns to CPU work and consumes no GPU budget.
 

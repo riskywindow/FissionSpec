@@ -16,7 +16,7 @@ promotes a simulator result to accelerator evidence.
 | E. Statistics/workloads | Active | `statistics.py`, `workload_generators.py`, `artifacts.py`; paired effects, cluster bootstrap, confidence sequence, power planning, MMPP/Pareto/replay | Full predeclared 30-cluster matrix, held-out results, and byte-golden study artifacts are in progress |
 | F. Theory | Core complete; empirical-gap study active | `theory.py`, exact rational edge tests, `general_oracle.py` | Populate broad bounded-oracle gap and adversarial phase evidence |
 | G. Release/reproducibility | Active | existing Python/Rust CI and one-command checks | Clean sdist/wheel installs, typed package marker/API, coverage gates, MSRV matrix, archival environment, and complete CPU reproduction target are in progress |
-| H. Manuscript/claims | Structure complete; result population active | `paper/manuscript.md`, `claims_evidence.md`, dated `literature_matrix.md`, frozen `gpu_preregistration.md` | Replace only CPU placeholders with generated artifacts; leave all GPU cells unmeasured |
+| H. Manuscript/claims | Structure complete; result population active | `paper/manuscript.md`, `claims_evidence.md`, dated `literature_matrix.md`, frozen `gpu_preregistration.md`, fail-closed `spend_gate.py` | Replace only CPU placeholders with generated artifacts; leave all GPU cells unmeasured |
 
 ## Current zero-GPU release decision
 
