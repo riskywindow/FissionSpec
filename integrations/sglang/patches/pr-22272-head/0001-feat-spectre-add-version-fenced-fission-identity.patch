@@ -1,0 +1,648 @@
+From 9b3a1a972e56a99b76132e7f74a8dbd1f18e8450 Mon Sep 17 00:00:00 2001
+From: FissionSpec contributors <fissionspec@users.noreply.github.com>
+Date: Thu, 23 Jul 2026 11:24:02 -0700
+Subject: [PATCH 1/5] feat(spectre): add version-fenced fission identity
+
+---
+ .../drafter/spectre_draft_scheduler_mixin.py  |  41 ++-
+ .../spectre/drafter/spectre_state_manager.py  |   2 +
+ .../srt/speculative/spectre/fission_state.py  | 287 ++++++++++++++++++
+ .../speculative/spectre/spectre_protocol.py   |   3 +
+ test/srt/test_spectre_fission_protocol.py     |  63 ++++
+ test/srt/test_spectre_fission_state.py        | 138 +++++++++
+ 6 files changed, 530 insertions(+), 4 deletions(-)
+ create mode 100644 python/sglang/srt/speculative/spectre/fission_state.py
+ create mode 100644 test/srt/test_spectre_fission_protocol.py
+ create mode 100644 test/srt/test_spectre_fission_state.py
+
+diff --git a/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py b/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py
+index 0f68fc899..0bb4ac214 100644
+--- a/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py
++++ b/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py
+@@ -442,10 +442,19 @@ class SpectreDraftSchedulerMixin:
+                 control_msgs.append(draft_req)
+                 continue
+ 
+-            if (
+-                req_id not in latest_msgs
+-                or draft_req.spec_cnt > latest_msgs[req_id].spec_cnt
+-            ):
++            incoming_key = (
++                draft_req.spec_cnt,
++                getattr(draft_req, "fission_version", None) or 0,
++            )
++            current_key = (
++                (
++                    latest_msgs[req_id].spec_cnt,
++                    getattr(latest_msgs[req_id], "fission_version", None) or 0,
++                )
++                if req_id in latest_msgs
++                else None
++            )
++            if current_key is None or incoming_key > current_key:
+                 if req_id in latest_msgs and draft_req.input_ids is None:
+                     draft_req.input_ids = latest_msgs[req_id].input_ids
+                     draft_req.sampling_params = (
+@@ -464,6 +473,24 @@ class SpectreDraftSchedulerMixin:
+         for draft_req in control_msgs:
+             action = draft_req.action
+             if action in (SpectreAction.FINISH, SpectreAction.ABORT):
++                state = self._get_draft_state(draft_req.request_id)
++                incoming_version = getattr(draft_req, "fission_version", None)
++                if (
++                    incoming_version is not None
++                    and state is not None
++                    and (draft_req.spec_cnt, incoming_version)
++                    < (state.spec_cnt, state.fission_version)
++                ):
++                    if self.tp_rank == 0:
++                        logger.debug(
++                            "[Draft] ignored stale control for %s: (%s, %s) < (%s, %s)",
++                            draft_req.request_id,
++                            draft_req.spec_cnt,
++                            incoming_version,
++                            state.spec_cnt,
++                            state.fission_version,
++                        )
++                    continue
+                 if self.tp_rank == 0:
+                     logger.debug(
+                         f"[Draft] Received {action} for {draft_req.request_id}"
+@@ -496,6 +523,9 @@ class SpectreDraftSchedulerMixin:
+ 
+                 req.target_send_time = draft_req.target_send_time
+                 req.draft_recv_time = draft_req.draft_recv_time
++                req.fission_version = getattr(draft_req, "fission_version", None) or 0
++                state.spec_cnt = draft_req.spec_cnt
++                state.fission_version = req.fission_version
+ 
+                 if draft_req.input_ids is not None:
+                     target_input = draft_req.input_ids
+@@ -969,6 +999,7 @@ class SpectreDraftSchedulerMixin:
+         response = SpectreRequest(
+             request_id=req.rid,
+             spec_cnt=req.spec_cnt,
++            fission_version=getattr(req, "fission_version", None),
+             action=SpectreAction.DRAFT,
+             spec_type=SpecType.DRAFT_RESPONSE,
+             draft_token_ids=draft_tokens,
+@@ -1036,6 +1067,7 @@ class SpectreDraftSchedulerMixin:
+         )
+ 
+         req.spec_cnt = draft_req.spec_cnt
++        req.fission_version = getattr(draft_req, "fission_version", None) or 0
+         req.spec_type = SpecType.DRAFT_REQUEST
+         req.tokenizer = self.tokenizer
+         req.logprob_start_len = len(req.origin_input_ids) - 1
+@@ -1053,6 +1085,7 @@ class SpectreDraftSchedulerMixin:
+             SpectreDraftState(
+                 req_id=req_id,
+                 spec_cnt=draft_req.spec_cnt,
++                fission_version=getattr(draft_req, "fission_version", None) or 0,
+                 req_object=req,
+                 location=DraftReqLocation.DRAFT_WAITING,
+                 target_origin_input_ids=(
+diff --git a/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py b/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py
+index ad1b93e59..b76b40e27 100644
+--- a/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py
++++ b/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py
+@@ -15,6 +15,7 @@ class SpectreDraftState:
+     req_id: str
+     spec_cnt: int
+     req_object: Optional["Req"]
++    fission_version: int = 0
+     location: str = "waiting_queue"
+     target_origin_input_ids: Optional[List[int]] = None
+     last_prefix_length: int = 0
+@@ -97,6 +98,7 @@ class SpectreDraftStateManager:
+         state = SpectreDraftState(
+             req_id=req_id,
+             spec_cnt=spec_cnt,
++            fission_version=0,
+             req_object=req_object,
+             location=location,
+             last_prefix_length=prefix_length,
+diff --git a/python/sglang/srt/speculative/spectre/fission_state.py b/python/sglang/srt/speculative/spectre/fission_state.py
+new file mode 100644
+index 000000000..898b02c0b
+--- /dev/null
++++ b/python/sglang/srt/speculative/spectre/fission_state.py
+@@ -0,0 +1,287 @@
++"""CPU-only request identity and lane state for SPECTRE fission mode.
++
++This module deliberately has no torch, CUDA, or SGLang scheduler imports.  The
++target scheduler owns the request and KV descriptors; this table only decides
++whether an asynchronous event is allowed to mutate that ownership.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, replace
++from enum import Enum
++import os
++from typing import Dict, Iterable, Optional
++
++
++class FissionLane(str, Enum):
++    READY_HIT = "ready_hit"
++    VERIFYING = "verifying"
++    RECOVERING = "recovering"
++    READY_BACKUP = "ready_backup"
++    BYPASS = "bypass"
++    FINISHED = "finished"
++    CANCELLED = "cancelled"
++
++
++class FissionOutcome(str, Enum):
++    HIT = "hit"
++    RECOVERING = "recovering"
++    FINISHED = "finished"
++
++
++class FissionEventResult(str, Enum):
++    APPLIED = "applied"
++    DUPLICATE = "duplicate"
++    STALE = "stale"
++    INVALID = "invalid"
++
++
++def fission_enabled(environ: Optional[dict[str, str]] = None) -> bool:
++    """Return the opt-in flag; absence and malformed values fail off."""
++
++    source = os.environ if environ is None else environ
++    return source.get("SGLANG_SPECTRE_FISSION", "0").lower() in {
++        "1",
++        "true",
++        "yes",
++    }
++
++
++@dataclass(frozen=True, order=True)
++class FissionKey:
++    request_id: str
++    spec_cnt: int
++    fission_version: int
++
++
++@dataclass(frozen=True)
++class FissionOutcomeEvent:
++    key: FissionKey
++    outcome: FissionOutcome
++    next_spec_cnt: int
++
++
++@dataclass(frozen=True)
++class FissionRecord:
++    key: FissionKey
++    lane: FissionLane
++    ready_since_ns: int
++    recovery_started_ns: Optional[int] = None
++    deadline_ns: Optional[int] = None
++    stale_events: int = 0
++    duplicate_events: int = 0
++
++    def recovery_age_ns(self, now_ns: int) -> int:
++        if self.recovery_started_ns is None:
++            return 0
++        return max(0, now_ns - self.recovery_started_ns)
++
++
++class FissionStateTable:
++    """Version-fenced lane transitions for one target scheduler process."""
++
++    def __init__(self) -> None:
++        self._records: Dict[str, FissionRecord] = {}
++
++    def ensure(
++        self,
++        request_id: str,
++        spec_cnt: int,
++        now_ns: int,
++        *,
++        deadline_ns: Optional[int] = None,
++    ) -> FissionRecord:
++        record = self._records.get(request_id)
++        if record is None:
++            record = FissionRecord(
++                key=FissionKey(request_id, spec_cnt, 0),
++                lane=FissionLane.READY_HIT,
++                ready_since_ns=now_ns,
++                deadline_ns=deadline_ns,
++            )
++            self._records[request_id] = record
++        return record
++
++    def get(self, request_id: str) -> Optional[FissionRecord]:
++        return self._records.get(request_id)
++
++    def records(self) -> Iterable[FissionRecord]:
++        return tuple(self._records.values())
++
++    def begin_verify(
++        self, request_id: str
++    ) -> tuple[FissionEventResult, Optional[FissionKey]]:
++        record = self._records.get(request_id)
++        if record is None:
++            return FissionEventResult.INVALID, None
++        if record.lane == FissionLane.VERIFYING:
++            duplicate = replace(record, duplicate_events=record.duplicate_events + 1)
++            self._records[request_id] = duplicate
++            return FissionEventResult.DUPLICATE, record.key
++        if record.lane not in {
++            FissionLane.READY_HIT,
++            FissionLane.READY_BACKUP,
++            FissionLane.BYPASS,
++        }:
++            return FissionEventResult.INVALID, record.key
++        self._records[request_id] = replace(record, lane=FissionLane.VERIFYING)
++        return FissionEventResult.APPLIED, record.key
++
++    def post_verify(
++        self,
++        key: FissionKey,
++        outcome: FissionOutcome,
++        next_spec_cnt: int,
++        now_ns: int,
++    ) -> tuple[FissionEventResult, Optional[FissionKey]]:
++        record = self._records.get(key.request_id)
++        if record is None:
++            return FissionEventResult.STALE, None
++        if record.key != key:
++            self._records[key.request_id] = replace(
++                record, stale_events=record.stale_events + 1
++            )
++            return FissionEventResult.STALE, record.key
++        if record.lane != FissionLane.VERIFYING:
++            self._records[key.request_id] = replace(
++                record, duplicate_events=record.duplicate_events + 1
++            )
++            return FissionEventResult.DUPLICATE, record.key
++
++        next_key = FissionKey(
++            key.request_id,
++            next_spec_cnt,
++            key.fission_version + 1,
++        )
++        if outcome == FissionOutcome.HIT:
++            next_record = replace(
++                record,
++                key=next_key,
++                lane=FissionLane.READY_HIT,
++                ready_since_ns=now_ns,
++                recovery_started_ns=None,
++            )
++        elif outcome == FissionOutcome.RECOVERING:
++            next_record = replace(
++                record,
++                key=next_key,
++                lane=FissionLane.RECOVERING,
++                recovery_started_ns=now_ns,
++            )
++        elif outcome == FissionOutcome.FINISHED:
++            next_record = replace(
++                record,
++                key=next_key,
++                lane=FissionLane.FINISHED,
++                recovery_started_ns=None,
++            )
++        else:
++            return FissionEventResult.INVALID, record.key
++        self._records[key.request_id] = next_record
++        return FissionEventResult.APPLIED, next_key
++
++    def complete_recovery(self, key: FissionKey, now_ns: int) -> FissionEventResult:
++        record = self._records.get(key.request_id)
++        if record is None:
++            return FissionEventResult.STALE
++        if record.key != key:
++            self._records[key.request_id] = replace(
++                record, stale_events=record.stale_events + 1
++            )
++            return FissionEventResult.STALE
++        if record.lane == FissionLane.READY_BACKUP:
++            self._records[key.request_id] = replace(
++                record, duplicate_events=record.duplicate_events + 1
++            )
++            return FissionEventResult.DUPLICATE
++        if record.lane != FissionLane.RECOVERING:
++            return FissionEventResult.INVALID
++        self._records[key.request_id] = replace(
++            record,
++            lane=FissionLane.READY_BACKUP,
++            ready_since_ns=now_ns,
++            recovery_started_ns=None,
++        )
++        return FissionEventResult.APPLIED
++
++    def force_bypass(self, request_id: str, now_ns: int) -> FissionEventResult:
++        record = self._records.get(request_id)
++        if record is None:
++            return FissionEventResult.INVALID
++        if record.lane in {FissionLane.FINISHED, FissionLane.CANCELLED}:
++            return FissionEventResult.INVALID
++        if record.lane == FissionLane.BYPASS:
++            self._records[request_id] = replace(
++                record, duplicate_events=record.duplicate_events + 1
++            )
++            return FissionEventResult.DUPLICATE
++        self._records[request_id] = replace(
++            record,
++            key=FissionKey(
++                request_id,
++                record.key.spec_cnt,
++                record.key.fission_version + 1,
++            ),
++            lane=FissionLane.BYPASS,
++            ready_since_ns=now_ns,
++            recovery_started_ns=None,
++        )
++        return FissionEventResult.APPLIED
++
++    def expire(self, now_ns: int, recovery_timeout_ns: int) -> tuple[FissionKey, ...]:
++        expired = []
++        for record in tuple(self._records.values()):
++            if record.lane != FissionLane.RECOVERING:
++                continue
++            timed_out = record.recovery_age_ns(now_ns) >= recovery_timeout_ns
++            deadline_missed = (
++                record.deadline_ns is not None and now_ns >= record.deadline_ns
++            )
++            if timed_out or deadline_missed:
++                expired.append(record.key)
++                self.force_bypass(record.key.request_id, now_ns)
++        return tuple(expired)
++
++    def finish(self, request_id: str, spec_cnt: int) -> FissionEventResult:
++        record = self._records.get(request_id)
++        if record is None:
++            return FissionEventResult.INVALID
++        if record.lane == FissionLane.FINISHED:
++            return FissionEventResult.DUPLICATE
++        self._records[request_id] = replace(
++            record,
++            key=FissionKey(
++                request_id,
++                spec_cnt,
++                record.key.fission_version + 1,
++            ),
++            lane=FissionLane.FINISHED,
++            recovery_started_ns=None,
++        )
++        return FissionEventResult.APPLIED
++
++    def cancel(self, request_id: str, spec_cnt: int) -> FissionEventResult:
++        record = self._records.get(request_id)
++        if record is None:
++            return FissionEventResult.INVALID
++        if record.lane == FissionLane.CANCELLED:
++            return FissionEventResult.DUPLICATE
++        self._records[request_id] = replace(
++            record,
++            key=FissionKey(
++                request_id,
++                spec_cnt,
++                record.key.fission_version + 1,
++            ),
++            lane=FissionLane.CANCELLED,
++            recovery_started_ns=None,
++        )
++        return FissionEventResult.APPLIED
++
++    def remove_terminal(self, request_id: str) -> None:
++        record = self._records.get(request_id)
++        if record is not None and record.lane in {
++            FissionLane.FINISHED,
++            FissionLane.CANCELLED,
++        }:
++            del self._records[request_id]
+diff --git a/python/sglang/srt/speculative/spectre/spectre_protocol.py b/python/sglang/srt/speculative/spectre/spectre_protocol.py
+index 76e6e2933..475532f0a 100644
+--- a/python/sglang/srt/speculative/spectre/spectre_protocol.py
++++ b/python/sglang/srt/speculative/spectre/spectre_protocol.py
+@@ -70,6 +70,9 @@ class SpecType(Enum):
+ class SpectreRequest:
+     request_id: Optional[str] = None
+     spec_cnt: Optional[int] = None
++    # Optional for wire compatibility. Fission mode always populates it and
++    # fences state changes on the full (request_id, spec_cnt, fission_version).
++    fission_version: Optional[int] = None
+     action: SpectreAction = SpectreAction.FINISH
+     spec_type: SpecType = SpecType.NORMAL
+     draft_token_ids: Optional[List[int]] = None
+diff --git a/test/srt/test_spectre_fission_protocol.py b/test/srt/test_spectre_fission_protocol.py
+new file mode 100644
+index 000000000..c2b40081f
+--- /dev/null
++++ b/test/srt/test_spectre_fission_protocol.py
+@@ -0,0 +1,63 @@
++import importlib.util
++from pathlib import Path
++import sys
++from types import ModuleType
++import unittest
++
++_ROOT = Path(__file__).resolve().parents[2]
++_SOURCE = _ROOT / "python/sglang/srt/speculative/spectre/spectre_protocol.py"
++
++
++class _SamplingParams:
++    def __init__(self, **values):
++        self.__dict__.update(values)
++
++
++sampling_module = ModuleType("sglang.srt.sampling.sampling_params")
++sampling_module.SamplingParams = _SamplingParams
++sys.modules[sampling_module.__name__] = sampling_module
++
++_SPEC = importlib.util.spec_from_file_location("spectre_protocol_test", _SOURCE)
++assert _SPEC is not None and _SPEC.loader is not None
++PROTOCOL = importlib.util.module_from_spec(_SPEC)
++sys.modules[_SPEC.name] = PROTOCOL
++_SPEC.loader.exec_module(PROTOCOL)
++
++
++class TestFissionWireIdentity(unittest.TestCase):
++    def test_legacy_message_omits_optional_version(self):
++        message = PROTOCOL.SpectreRequest(request_id="r0", spec_cnt=4)
++        wire = message.to_dict()
++        self.assertNotIn("fission_version", wire)
++        decoded = PROTOCOL.SpectreRequest.from_dict(wire)
++        self.assertIsNone(decoded.fission_version)
++
++    def test_fission_version_round_trips(self):
++        message = PROTOCOL.SpectreRequest(
++            request_id="r0",
++            spec_cnt=4,
++            fission_version=12,
++            action=PROTOCOL.SpectreAction.DRAFT,
++        )
++        wire = message.to_dict()
++        decoded = PROTOCOL.SpectreRequest.from_dict(wire)
++        self.assertEqual(
++            (decoded.request_id, decoded.spec_cnt, decoded.fission_version),
++            ("r0", 4, 12),
++        )
++        self.assertEqual(decoded.action, PROTOCOL.SpectreAction.DRAFT)
++
++    def test_unknown_fields_remain_forward_compatible(self):
++        decoded = PROTOCOL.SpectreRequest.from_dict(
++            {
++                "request_id": "r0",
++                "spec_cnt": 4,
++                "fission_version": 12,
++                "future_field": "ignored",
++            }
++        )
++        self.assertEqual(decoded.fission_version, 12)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/test/srt/test_spectre_fission_state.py b/test/srt/test_spectre_fission_state.py
+new file mode 100644
+index 000000000..3d1f11b21
+--- /dev/null
++++ b/test/srt/test_spectre_fission_state.py
+@@ -0,0 +1,138 @@
++import itertools
++import importlib.util
++from pathlib import Path
++import sys
++import unittest
++
++_SOURCE = (
++    Path(__file__).resolve().parents[2]
++    / "python/sglang/srt/speculative/spectre/fission_state.py"
++)
++_SPEC = importlib.util.spec_from_file_location("spectre_fission_state", _SOURCE)
++assert _SPEC is not None and _SPEC.loader is not None
++_MODULE = importlib.util.module_from_spec(_SPEC)
++sys.modules[_SPEC.name] = _MODULE
++_SPEC.loader.exec_module(_MODULE)
++
++FissionEventResult = _MODULE.FissionEventResult
++FissionKey = _MODULE.FissionKey
++FissionLane = _MODULE.FissionLane
++FissionOutcome = _MODULE.FissionOutcome
++FissionStateTable = _MODULE.FissionStateTable
++fission_enabled = _MODULE.fission_enabled
++
++
++class TestFissionStateTable(unittest.TestCase):
++    def test_feature_flag_is_off_by_default(self):
++        self.assertFalse(fission_enabled({}))
++        self.assertFalse(fission_enabled({"SGLANG_SPECTRE_FISSION": "garbage"}))
++        self.assertTrue(fission_enabled({"SGLANG_SPECTRE_FISSION": "true"}))
++
++    def _verifying(
++        self, rid: str = "r0", spec_cnt: int = 7
++    ) -> tuple[FissionStateTable, FissionKey]:
++        table = FissionStateTable()
++        table.ensure(rid, spec_cnt, 10)
++        result, key = table.begin_verify(rid)
++        self.assertEqual(result, FissionEventResult.APPLIED)
++        self.assertIsNotNone(key)
++        return table, key
++
++    def test_hit_advances_full_identity(self):
++        table, key = self._verifying()
++        result, next_key = table.post_verify(key, FissionOutcome.HIT, 8, 20)
++        self.assertEqual(result, FissionEventResult.APPLIED)
++        self.assertEqual(next_key, FissionKey("r0", 8, 1))
++        self.assertEqual(table.get("r0").lane, FissionLane.READY_HIT)
++
++    def test_recovery_is_version_fenced_and_idempotent(self):
++        table, key = self._verifying()
++        _, recovery_key = table.post_verify(key, FissionOutcome.RECOVERING, 8, 20)
++        self.assertEqual(table.complete_recovery(key, 30), FissionEventResult.STALE)
++        self.assertEqual(
++            table.complete_recovery(recovery_key, 30),
++            FissionEventResult.APPLIED,
++        )
++        self.assertEqual(
++            table.complete_recovery(recovery_key, 31),
++            FissionEventResult.DUPLICATE,
++        )
++        record = table.get("r0")
++        self.assertEqual(record.lane, FissionLane.READY_BACKUP)
++        self.assertEqual(record.stale_events, 1)
++        self.assertEqual(record.duplicate_events, 1)
++
++    def test_cancel_fences_inflight_recovery(self):
++        table, key = self._verifying()
++        _, recovery_key = table.post_verify(key, FissionOutcome.RECOVERING, 8, 20)
++        self.assertEqual(table.cancel("r0", 8), FissionEventResult.APPLIED)
++        self.assertEqual(
++            table.complete_recovery(recovery_key, 30),
++            FissionEventResult.STALE,
++        )
++        self.assertEqual(table.get("r0").lane, FissionLane.CANCELLED)
++
++    def test_timeout_and_deadline_fail_to_bypass(self):
++        timeout_table, timeout_key = self._verifying("timeout")
++        timeout_table.post_verify(timeout_key, FissionOutcome.RECOVERING, 8, 20)
++        self.assertEqual(timeout_table.expire(119, 100), ())
++        self.assertEqual(
++            timeout_table.expire(120, 100),
++            (FissionKey("timeout", 8, 1),),
++        )
++        self.assertEqual(timeout_table.get("timeout").lane, FissionLane.BYPASS)
++
++        deadline_table = FissionStateTable()
++        deadline_table.ensure("deadline", 2, 10, deadline_ns=50)
++        _, deadline_key = deadline_table.begin_verify("deadline")
++        deadline_table.post_verify(deadline_key, FissionOutcome.RECOVERING, 3, 20)
++        deadline_table.expire(50, 10_000)
++        self.assertEqual(
++            deadline_table.get("deadline").lane,
++            FissionLane.BYPASS,
++        )
++
++    def test_duplicate_post_verify_cannot_advance_twice(self):
++        table, key = self._verifying()
++        table.post_verify(key, FissionOutcome.HIT, 8, 20)
++        result, current = table.post_verify(key, FissionOutcome.HIT, 8, 21)
++        self.assertEqual(result, FissionEventResult.STALE)
++        self.assertEqual(current, FissionKey("r0", 8, 1))
++
++    def test_reordered_events_have_one_legal_commit(self):
++        for order in itertools.permutations(("stale", "valid", "duplicate")):
++            table, old_key = self._verifying()
++            _, recovery_key = table.post_verify(
++                old_key, FissionOutcome.RECOVERING, 8, 20
++            )
++            results = []
++            for event in order:
++                if event == "stale":
++                    results.append(table.complete_recovery(old_key, 30))
++                else:
++                    results.append(table.complete_recovery(recovery_key, 30))
++            self.assertEqual(results.count(FissionEventResult.APPLIED), 1)
++            self.assertEqual(table.get("r0").lane, FissionLane.READY_BACKUP)
++
++    def test_force_bypass_is_a_versioned_circuit_breaker_transition(self):
++        table, key = self._verifying()
++        _, recovery_key = table.post_verify(key, FissionOutcome.RECOVERING, 8, 20)
++        self.assertEqual(table.force_bypass("r0", 25), FissionEventResult.APPLIED)
++        bypass = table.get("r0")
++        self.assertEqual(bypass.lane, FissionLane.BYPASS)
++        self.assertEqual(bypass.key.fission_version, 2)
++        self.assertEqual(
++            table.complete_recovery(recovery_key, 30),
++            FissionEventResult.STALE,
++        )
++
++    def test_finish_and_cancel_are_terminal_and_removable(self):
++        table, _ = self._verifying()
++        self.assertEqual(table.finish("r0", 8), FissionEventResult.APPLIED)
++        self.assertEqual(table.get("r0").lane, FissionLane.FINISHED)
++        table.remove_terminal("r0")
++        self.assertIsNone(table.get("r0"))
++
++
++if __name__ == "__main__":
++    unittest.main()
+
+base-commit: 1a8520879c53462b7ac1861d3aad7de4bf5860d4
+-- 
+2.39.5 (Apple Git-154)

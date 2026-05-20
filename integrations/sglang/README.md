@@ -1,10 +1,12 @@
 # SGLang integration contract
 
-This directory is a patch map, not a claim that the laptop artifact executes
-SGLang kernels. The natural first production integration is SGLang because
-SPECTRE already supplies a remote-drafter transport and chain-verification
-path. FissionSpec changes the target scheduler boundary after rejection
-sampling; it does not require a new verifier.
+This directory contains an apply-clean behavior prototype against the exact
+open SPECTRE PR head, plus a map for the non-mechanical current-main rebase. It
+is not a claim that the laptop artifact executes SGLang kernels. The natural
+first production integration is SGLang because SPECTRE already supplies a
+remote-drafter transport and chain-verification path. FissionSpec changes the
+target scheduler boundary after rejection sampling; it does not require a new
+verifier.
 
 ## Pinned upstream seam
 
@@ -18,10 +20,11 @@ SPECTRE implementation remained open PR
 This distinction is operationally important. The PR adds its own scheduler
 mixins and modifies the former `scheduler_output_processor_mixin.py`; current
 main has since moved decode-result handling into
-`scheduler_components/batch_result_processor.py` and enables speculative V2
-overlap by default. A FissionSpec patch must first rebase the SPECTRE outcome
-producer onto the pinned main architecture. Applying a patch directly to the
-old PR base would spend GPU setup time discovering source drift.
+`scheduler_components/batch_result_processor.py` and uses the speculative V2
+result contract. The patch series here intentionally targets the PR head so its
+SPECTRE behavior is concrete and reviewable. A production patch must then
+follow `rebase_map.md`; applying the series to current main is expected to fail
+rather than silently targeting the wrong architecture.
 
 The PR already exposes the critical post-verification facts:
 
@@ -44,6 +47,54 @@ The production patch therefore has four narrow changes after the rebase:
 
 File hashes in `upstream_pin.json` make this seam fail closed when either main
 or the open PR moves.
+
+## Apply-clean prototype
+
+`patch_manifest.json` pins the ordered patch SHA-256 values, source preimage
+hashes, upstream PR base/head, current-main audit commit, CPU validation
+commands, and untested runtime boundary. The five mail patches under
+`patches/pr-22272-head/` are:
+
+1. version-fenced wire/drafter/target identity and the pure CPU state machine;
+2. per-request outcome publication, physical row parking, asynchronous
+   recovery, reinsertion, and shape telemetry; and
+3. upstream-facing documentation of flags and the fail-closed seam;
+4. identity resynchronization across target-only rounds and parked-request
+   cancellation cleanup through the ordinary target lifecycle; and
+5. fail-closed validation of wire keys and exact-key fencing for versioned
+   FINISH/ABORT controls, including missing and malformed identities.
+
+To validate against a local SGLang repository that contains PR head
+`1a8520879c53462b7ac1861d3aad7de4bf5860d4`:
+
+```bash
+python3 integrations/sglang/validate_patch.py \
+  --sglang /path/to/sglang
+```
+
+The validator checks every patch and source hash, creates a detached temporary
+worktree at the exact head, runs `git apply --check` before applying each patch
+in order, runs Ruff and syntax checks, and executes 23 CPU tests. It does not
+launch a model worker or import CUDA.
+
+Manual application is:
+
+```bash
+git checkout --detach 1a8520879c53462b7ac1861d3aad7de4bf5860d4
+git am /path/to/fissionspec/integrations/sglang/patches/pr-22272-head/*.patch
+```
+
+The feature is fully opt-in through `SGLANG_SPECTRE_FISSION=1`; absence,
+malformed values, and the default select the original SPECTRE path. In fission
+mode `_post_verify_update_drafts` cannot call the synchronous retry callback.
+
+The CPU tests prove complete nonnegative wire-key validation, exact matching
+for versioned controls, first-completion-wins deduplication,
+stale/reordered/cancelled/timeout behavior, descriptor exclusion, unchanged
+`req_pool_idx`, and exactly-once fake-batch reinsertion. They do not prove that
+`Scheduler._build_hisparse_decode_batch([req])` reconstructs every
+backend-specific descriptor or that a smaller batch reduces physical GPU work.
+Those are the deliberately isolated runtime seams.
 
 ## Required scheduler state
 

@@ -1,0 +1,114 @@
+From 3041090e9c1c6b4613543b8e737e9e3d12832a44 Mon Sep 17 00:00:00 2001
+From: FissionSpec contributors <fissionspec@users.noreply.github.com>
+Date: Thu, 23 Jul 2026 11:24:13 -0700
+Subject: [PATCH 3/5] docs(spectre): define fission safety boundary
+
+---
+ docs/advanced_features/spectre_fission.md | 96 +++++++++++++++++++++++
+ 1 file changed, 96 insertions(+)
+ create mode 100644 docs/advanced_features/spectre_fission.md
+
+diff --git a/docs/advanced_features/spectre_fission.md b/docs/advanced_features/spectre_fission.md
+new file mode 100644
+index 000000000..f9df647c1
+--- /dev/null
++++ b/docs/advanced_features/spectre_fission.md
+@@ -0,0 +1,96 @@
++# Experimental SPECTRE fission mode
++
++> **Status:** review prototype. This path has CPU-only state/scheduler tests. It
++> has not run a target-model kernel and is disabled by default.
++
++SPECTRE fission mode removes a request whose speculative continuation missed
++from the *next* target verifier descriptor while its remote-draft recovery is
++in flight. The request keeps its target `req_pool_idx` and target KV ownership.
++A matching asynchronous recovery changes the lane to `READY_BACKUP`, rebuilds
++a decode descriptor around the same request object, and publishes it back to
++the target running batch.
++
++Enable the prototype explicitly:
++
++```bash
++SGLANG_SPECTRE_FISSION=1 \
++SGLANG_SPECTRE_FISSION_TIMEOUT_MS=200 \
++python -m sglang.launch_server ... --speculative-algorithm SPECTRE
++```
++
++Absence of `SGLANG_SPECTRE_FISSION`, an empty value, or an unrecognised value
++selects the original SPECTRE path. In particular, the original synchronous
++retry callback is unchanged when the flag is off. Fission mode never calls the
++synchronous retry callback.
++
++## Identity and transitions
++
++Every fission-mode request and reply carries:
++
++```text
++(request_id, spec_cnt, fission_version)
++```
++
++The target owns a version-fenced state table:
++
++```text
++READY_HIT ──verify/HIT──────────────> READY_HIT
++READY_HIT ──verify/miss─────────────> RECOVERING
++RECOVERING ──matching reply─────────> READY_BACKUP
++RECOVERING ──timeout/breaker────────> BYPASS
++READY_BACKUP ──verify───────────────> ...
++* ──finish/cancel───────────────────> FINISHED/CANCELLED
++```
++
++Every transition that starts another logical round increments
++`fission_version`. A duplicate completion is telemetry only. A stale
++completion, including one from before cancellation or timeout, cannot change
++draft tokens, the target descriptor, or lane membership.
++
++The verifier emits one immutable `FissionOutcomeEvent` per request after
++verification: `HIT`, `RECOVERING`, or `FINISHED`. The target scheduler commits
++these events and physically calls `ScheduleBatch.filter_batch` before another
++target dispatch. A recovery request is sent asynchronously; there is no wait
++in `_post_verify_update_drafts`.
++
++## Shape telemetry
++
++The target logs a structured line for every fission dispatch:
++
++```text
++logical_rows=... real_verifier_slots=... graph_bucket_slots=...
++recovery_age_ms=[...]
++```
++
++`real_verifier_slots` is the submitted row count multiplied by uniform SPECTRE
++verify width. `graph_bucket_slots` uses the smallest configured
++`cuda_graph_bs` bucket that contains the submitted rows. `logical_rows`
++includes parked recovery owners. These counters must be checked against a
++profiler before making a physical-work claim.
++
++## Fail-closed runtime seam
++
++CPU tests prove identity fencing, duplicate/stale/reordered reply behavior,
++cancellation, timeout/circuit-breaker fallback, descriptor exclusion, and
++exactly-once reinsertion with fake requests and batches. They also prove that
++exclusion does not modify the request's target `req_pool_idx`.
++
++They do **not** prove that `_build_hisparse_decode_batch([req])` reconstructs
++every backend-specific decode descriptor correctly while preserving all target
++KV invariants. That helper is the closest existing PR-head seam for rebuilding
++a decode descriptor around an already-owned KV slot. If reconstruction throws,
++the patch leaves the request parked, increments the version fence, logs an
++exception, and does not publish the suspect descriptor.
++
++Before treating this as operational, run:
++
++1. target KV page-owner audits before exclusion and after reinsertion;
++2. byte-identical greedy decoding with forced misses at every graph boundary;
++3. sampled-output distribution tests with counter-addressed RNG;
++4. cancellation, timeout, OOM, duplicate, and reordered-message fault tests;
++5. attention-backend coverage for paged, radix, sliding-window, and Mamba
++   state; and
++6. a profiler check that fewer logical rows reduce real verifier or graph
++   bucket slots.
++
++The prototype intentionally makes no claim that any GPU kernel has run.
+-- 
+2.39.5 (Apple Git-154)

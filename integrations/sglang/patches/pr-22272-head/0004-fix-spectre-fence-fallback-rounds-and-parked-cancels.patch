@@ -1,0 +1,203 @@
+From 825d937f9912afb7ab502da16030f2ecf6e7a734 Mon Sep 17 00:00:00 2001
+From: FissionSpec contributors <fissionspec@users.noreply.github.com>
+Date: Thu, 23 Jul 2026 11:35:16 -0700
+Subject: [PATCH 4/5] fix(spectre): fence fallback rounds and parked cancels
+
+---
+ python/sglang/srt/managers/scheduler.py       |  9 +++++
+ .../srt/speculative/spectre/fission_state.py  | 20 +++++++++++
+ .../spectre_target_scheduler_mixin.py         | 36 ++++++++++++++++---
+ test/srt/test_spectre_fission_scheduler.py    | 15 ++++++++
+ test/srt/test_spectre_fission_state.py        | 15 ++++++++
+ 5 files changed, 90 insertions(+), 5 deletions(-)
+
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index 902869fe3..a76a146e3 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -3366,6 +3366,13 @@ class Scheduler(
+             reqs = self.running_batch.reqs
+         else:
+             reqs = self.running_batch.reqs + self.cur_batch.reqs
++        if getattr(self, "_spectre_fission_enabled", False):
++            active_ids = {id(req) for req in reqs}
++            reqs = reqs + [
++                req
++                for req in self._fission_parked.values()
++                if id(req) not in active_ids
++            ]
+ 
+         for req in reqs:
+             if not req.finished() and (
+@@ -3376,6 +3383,8 @@ class Scheduler(
+                 # Then we reuse all existing code to clean up the KV cache allocation.
+                 logger.debug(f"Abort running request. {req.rid=}")
+                 req.to_finish = FINISH_ABORT()
++                if getattr(self, "_spectre_fission_enabled", False):
++                    self._fission_cancel_parked(req)
+ 
+     def _pause_engine(self) -> Tuple[List[Req], int]:
+         raise NotImplementedError()
+diff --git a/python/sglang/srt/speculative/spectre/fission_state.py b/python/sglang/srt/speculative/spectre/fission_state.py
+index 898b02c0b..1312969dd 100644
+--- a/python/sglang/srt/speculative/spectre/fission_state.py
++++ b/python/sglang/srt/speculative/spectre/fission_state.py
+@@ -100,6 +100,24 @@ class FissionStateTable:
+                 deadline_ns=deadline_ns,
+             )
+             self._records[request_id] = record
++        elif record.key.spec_cnt != spec_cnt and record.lane in {
++            FissionLane.READY_HIT,
++            FissionLane.READY_BACKUP,
++            FissionLane.BYPASS,
++        }:
++            # A target-only fallback round can advance spec_cnt without a
++            # fission event. Resynchronize before the next speculative launch
++            # and bump the version so replies to the old tuple stay fenced.
++            record = replace(
++                record,
++                key=FissionKey(
++                    request_id,
++                    spec_cnt,
++                    record.key.fission_version + 1,
++                ),
++                ready_since_ns=now_ns,
++            )
++            self._records[request_id] = record
+         return record
+ 
+     def get(self, request_id: str) -> Optional[FissionRecord]:
+@@ -246,6 +264,8 @@ class FissionStateTable:
+         record = self._records.get(request_id)
+         if record is None:
+             return FissionEventResult.INVALID
++        if record.lane == FissionLane.CANCELLED:
++            return FissionEventResult.INVALID
+         if record.lane == FissionLane.FINISHED:
+             return FissionEventResult.DUPLICATE
+         self._records[request_id] = replace(
+diff --git a/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py b/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
+index 2089cc015..6d2862c45 100644
+--- a/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
++++ b/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
+@@ -790,7 +790,7 @@ class SchedulerSpectreTargetMixin:
+         for req in ready:
+             self._fission_reinsert(req)
+ 
+-    def _fission_reinsert(self, req: Req) -> None:
++    def _fission_reinsert(self, req: Req, *, terminal_cleanup: bool = False) -> None:
+         """Publish a parked request back into a target ScheduleBatch.
+ 
+         The helper reuses the existing req_pool_idx and therefore the target KV
+@@ -800,12 +800,17 @@ class SchedulerSpectreTargetMixin:
+         """
+ 
+         record = self._fission_state.get(req.rid)
+-        if record is None or record.lane not in {
++        admissible_lanes = {
+             FissionLane.READY_BACKUP,
+             FissionLane.BYPASS,
+-        }:
++        }
++        if terminal_cleanup:
++            admissible_lanes.add(FissionLane.CANCELLED)
++        if record is None or record.lane not in admissible_lanes:
+             return
+-        if req.finished() or getattr(req, "is_retracted", False):
++        if not terminal_cleanup and (
++            req.finished() or getattr(req, "is_retracted", False)
++        ):
+             self._fission_parked.pop(req.rid, None)
+             return
+         try:
+@@ -826,6 +831,24 @@ class SchedulerSpectreTargetMixin:
+                 req.rid,
+             )
+ 
++    def _fission_cancel_parked(self, req: Req) -> None:
++        """Fence an async recovery and return the owner for normal abort cleanup."""
++
++        if req.rid not in self._fission_parked:
++            return
++        self._fission_state.cancel(req.rid, req.spec_cnt)
++        record = self._fission_state.get(req.rid)
++        if record is None:
++            return
++        req.fission_version = record.key.fission_version
++        req.fission_lane = FissionLane.CANCELLED.value
++        req.cur_drafts = []
++        self.req_to_draft_token.pop(req.rid, None)
++        # Scheduler.abort_request has already set to_finish. Reinsert one
++        # descriptor so its existing result path releases target KV/pages and
++        # streams the abort, exactly as for an aborted running request.
++        self._fission_reinsert(req, terminal_cleanup=True)
++
+     def _fission_log_shape(self, batch: ScheduleBatch) -> None:
+         logical_rows = batch.batch_size() + len(self._fission_parked)
+         draft_width = max(1, getattr(batch, "draft_num_tokens", 1))
+@@ -879,7 +902,10 @@ class SchedulerSpectreTargetMixin:
+         if self._spectre_fission_enabled:
+             for req in batch.reqs:
+                 record = self._fission_state.get(req.rid)
+-                if record is not None and record.lane == FissionLane.BYPASS:
++                if record is not None and record.lane in {
++                    FissionLane.BYPASS,
++                    FissionLane.CANCELLED,
++                }:
+                     return 1
+ 
+         no_draft_reqs = sum(
+diff --git a/test/srt/test_spectre_fission_scheduler.py b/test/srt/test_spectre_fission_scheduler.py
+index 6fc17eab2..ffe3e0d7f 100644
+--- a/test/srt/test_spectre_fission_scheduler.py
++++ b/test/srt/test_spectre_fission_scheduler.py
+@@ -282,6 +282,21 @@ class TestFissionSchedulerHooks(unittest.TestCase):
+             ([11], [0.1]),
+         )
+ 
++    def test_cancel_fences_parked_recovery_and_reinserts_for_cleanup(self):
++        scheduler, batch, req = self._recovering_scheduler()
++        scheduler._fission_commit_outcomes_and_park(batch)
++
++        scheduler._fission_cancel_parked(req)
++
++        self.assertEqual([item.rid for item in scheduler.running_batch.reqs], ["r0"])
++        self.assertEqual(req.fission_lane, FISSION.FissionLane.CANCELLED.value)
++        self.assertNotIn(req.rid, scheduler._fission_parked)
++        self.assertNotIn(req.rid, scheduler.req_to_draft_token)
++        self.assertEqual(
++            scheduler._decide_verify_num_draft_tokens(scheduler.running_batch),
++            1,
++        )
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/test/srt/test_spectre_fission_state.py b/test/srt/test_spectre_fission_state.py
+index 3d1f11b21..ecd2d7a7b 100644
+--- a/test/srt/test_spectre_fission_state.py
++++ b/test/srt/test_spectre_fission_state.py
+@@ -133,6 +133,21 @@ class TestFissionStateTable(unittest.TestCase):
+         table.remove_terminal("r0")
+         self.assertIsNone(table.get("r0"))
+ 
++    def test_target_only_round_resynchronizes_full_identity(self):
++        table = FissionStateTable()
++        table.ensure("r0", 2, 10)
++        updated = table.ensure("r0", 5, 20)
++        self.assertEqual(updated.key, FissionKey("r0", 5, 1))
++        result, key = table.begin_verify("r0")
++        self.assertEqual(result, FissionEventResult.APPLIED)
++        self.assertEqual(key, FissionKey("r0", 5, 1))
++
++    def test_finish_cannot_overwrite_cancellation(self):
++        table, _ = self._verifying()
++        table.cancel("r0", 8)
++        self.assertEqual(table.finish("r0", 8), FissionEventResult.INVALID)
++        self.assertEqual(table.get("r0").lane, FissionLane.CANCELLED)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+-- 
+2.39.5 (Apple Git-154)

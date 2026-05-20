@@ -1,0 +1,95 @@
+{
+  "schema": "fissionspec.sglang-patch-series.v1",
+  "generated_at": "2026-07-23",
+  "repository": "https://github.com/sgl-project/sglang",
+  "target": {
+    "kind": "pull_request_head",
+    "pull_request": 22272,
+    "base_commit": "fae90abf6e15aaffb6fd924a439253674771487d",
+    "head_commit": "1a8520879c53462b7ac1861d3aad7de4bf5860d4"
+  },
+  "current_main_at_audit": "d0b9689805232d8ab37789121cbc3b766b5c723e",
+  "series": [
+    {
+      "order": 1,
+      "path": "patches/pr-22272-head/0001-feat-spectre-add-version-fenced-fission-identity.patch",
+      "sha256": "3383679520ff95e8c3a6b93084ee4d411269d780de207f350d2b03a6d73a85b1",
+      "commit": "9b3a1a972e56a99b76132e7f74a8dbd1f18e8450",
+      "subject": "feat(spectre): add version-fenced fission identity"
+    },
+    {
+      "order": 2,
+      "path": "patches/pr-22272-head/0002-feat-spectre-park-misses-for-async-recovery.patch",
+      "sha256": "f3a769d2512e81a7d104609135241d1fd7ba906c728c9caa834186b2ddf304bc",
+      "commit": "d185cec580f99a045701092f269e8907b11f1fb8",
+      "subject": "feat(spectre): park misses for async recovery"
+    },
+    {
+      "order": 3,
+      "path": "patches/pr-22272-head/0003-docs-spectre-define-fission-safety-boundary.patch",
+      "sha256": "7d97005440a075f9a9605cc4ed786134bff84d13a16d4a4d30110642c5839623",
+      "commit": "3041090e9c1c6b4613543b8e737e9e3d12832a44",
+      "subject": "docs(spectre): define fission safety boundary"
+    },
+    {
+      "order": 4,
+      "path": "patches/pr-22272-head/0004-fix-spectre-fence-fallback-rounds-and-parked-cancels.patch",
+      "sha256": "dacb106b04fde1d36742194058b52c3dd8d6c442f9eb0b2f4077ade3a3053275",
+      "commit": "825d937f9912afb7ab502da16030f2ecf6e7a734",
+      "subject": "fix(spectre): fence fallback rounds and parked cancels"
+    },
+    {
+      "order": 5,
+      "path": "patches/pr-22272-head/0005-fix-spectre-require-complete-fission-wire-identity.patch",
+      "sha256": "88eaa99bb5041af270984036fbb78e0c7a9aa117c6d23d8a58fa7d106e57a7ab",
+      "commit": "54df1d7641548ffe06160e1c193be395d2a6ec09",
+      "subject": "fix(spectre): require complete fission wire identity"
+    }
+  ],
+  "source_preimages": [
+    {
+      "path": "python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py",
+      "sha256": "ba71f333c320dd3095ec9efb3e1aff3cdcd93ab4801d394aba2c17d8407b6ec1"
+    },
+    {
+      "path": "python/sglang/srt/speculative/spectre/verifier/spectre_worker.py",
+      "sha256": "18df21b800d2dddffea413a0215226f2320b7dcfd3d1bda7328fcec405aa7ea4"
+    },
+    {
+      "path": "python/sglang/srt/speculative/spectre/spectre_protocol.py",
+      "sha256": "87978e58bdf992bc03269e703ee487dd3a6ece557bc0556c291f57b12b27898c"
+    },
+    {
+      "path": "python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py",
+      "sha256": "9d62015ca757c85813004f05e818c06de8c865dc25f746560687690f359a2288"
+    },
+    {
+      "path": "python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py",
+      "sha256": "9e8a31b816f634b4f83e4f6c395eb18627ea3f465118ed561d2175113f47bfbd"
+    },
+    {
+      "path": "python/sglang/srt/managers/schedule_batch.py",
+      "sha256": "969ba646dda5479451431108a3e977e8ebe4799693eaa33ce1e6ada1b2b744d3"
+    },
+    {
+      "path": "python/sglang/srt/managers/scheduler.py",
+      "sha256": "39244656955f0c887c6f413840b9430e7a18126268d5ad5fa7168e0926b8c58b"
+    }
+  ],
+  "cpu_validation": {
+    "tests": 23,
+    "commands": [
+      "python3 test/srt/test_spectre_fission_state.py",
+      "python3 test/srt/test_spectre_fission_scheduler.py",
+      "python3 test/srt/test_spectre_fission_protocol.py",
+      "ruff check <changed Python and test files>",
+      "python3 -m py_compile <changed Python files>"
+    ]
+  },
+  "payload_sha256": "c5b6cd1a8d7efbe7df61f32ecc690216e3e534a5e460ae75669e87cc06328698",
+  "runtime_boundary": {
+    "kernels_executed": false,
+    "reinsertion_status": "cpu_fake_only",
+    "untested_seam": "Reconstruction through Scheduler._build_hisparse_decode_batch([req]) must be validated for every attention/KV backend on an SGLang target runtime."
+  }
+}

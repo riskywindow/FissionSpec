@@ -1,0 +1,417 @@
+From 54df1d7641548ffe06160e1c193be395d2a6ec09 Mon Sep 17 00:00:00 2001
+From: FissionSpec contributors <fissionspec@users.noreply.github.com>
+Date: Thu, 23 Jul 2026 11:54:38 -0700
+Subject: [PATCH 5/5] fix(spectre): require complete fission wire identity
+
+---
+ docs/advanced_features/spectre_fission.md     |  4 +
+ .../drafter/spectre_draft_scheduler_mixin.py  | 91 +++++++++++++++----
+ .../spectre/drafter/spectre_state_manager.py  |  1 +
+ .../srt/speculative/spectre/fission_state.py  | 49 ++++++++++
+ .../spectre_target_scheduler_mixin.py         | 13 ++-
+ test/srt/test_spectre_fission_scheduler.py    | 43 +++++++++
+ test/srt/test_spectre_fission_state.py        | 48 ++++++++++
+ 7 files changed, 229 insertions(+), 20 deletions(-)
+
+diff --git a/docs/advanced_features/spectre_fission.md b/docs/advanced_features/spectre_fission.md
+index f9df647c1..eb431b44e 100644
+--- a/docs/advanced_features/spectre_fission.md
++++ b/docs/advanced_features/spectre_fission.md
+@@ -31,6 +31,10 @@ Every fission-mode request and reply carries:
+ (request_id, spec_cnt, fission_version)
+ ```
+ 
++Once a request has entered fission mode, a missing, malformed, stale, or
++future-version identity is telemetry only. In particular, rolling-compatible
++legacy messages cannot alias version zero or terminate a versioned draft state.
++
+ The target owns a version-fenced state table:
+ 
+ ```text
+diff --git a/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py b/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py
+index 0bb4ac214..4dddbaec8 100644
+--- a/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py
++++ b/python/sglang/srt/speculative/spectre/drafter/spectre_draft_scheduler_mixin.py
+@@ -17,6 +17,10 @@ from sglang.srt.speculative.spectre.drafter.spectre_state_manager import (
+     SpectreDraftState,
+     SpectreDraftStateManager,
+ )
++from sglang.srt.speculative.spectre.fission_state import (
++    fission_control_matches,
++    fission_wire_key,
++)
+ from sglang.srt.speculative.spectre.spectre_protocol import (
+     SpectreAction,
+     SpectreRequest,
+@@ -442,18 +446,31 @@ class SpectreDraftSchedulerMixin:
+                 control_msgs.append(draft_req)
+                 continue
+ 
+-            incoming_key = (
++            incoming_version = getattr(draft_req, "fission_version", None)
++            wire_key = fission_wire_key(
+                 draft_req.spec_cnt,
+-                getattr(draft_req, "fission_version", None) or 0,
++                incoming_version,
++                require_version=False,
+             )
+-            current_key = (
+-                (
++            if wire_key is None:
++                if self.tp_rank == 0:
++                    logger.debug("[Draft] ignored malformed identity for %s", req_id)
++                continue
++            # At equal numeric version, a present version outranks a legacy
++            # omission so an incomplete message cannot shadow the full key.
++            incoming_key = (incoming_version is not None, *wire_key)
++            current_key = None
++            if req_id in latest_msgs:
++                current_version = getattr(
++                    latest_msgs[req_id], "fission_version", None
++                )
++                current_wire_key = fission_wire_key(
+                     latest_msgs[req_id].spec_cnt,
+-                    getattr(latest_msgs[req_id], "fission_version", None) or 0,
++                    current_version,
++                    require_version=False,
+                 )
+-                if req_id in latest_msgs
+-                else None
+-            )
++                if current_wire_key is not None:
++                    current_key = (current_version is not None, *current_wire_key)
+             if current_key is None or incoming_key > current_key:
+                 if req_id in latest_msgs and draft_req.input_ids is None:
+                     draft_req.input_ids = latest_msgs[req_id].input_ids
+@@ -475,15 +492,26 @@ class SpectreDraftSchedulerMixin:
+             if action in (SpectreAction.FINISH, SpectreAction.ABORT):
+                 state = self._get_draft_state(draft_req.request_id)
+                 incoming_version = getattr(draft_req, "fission_version", None)
++                identity_required = (
++                    state is not None
++                    and (
++                        state.fission_identity_required
++                        or incoming_version is not None
++                    )
++                )
+                 if (
+-                    incoming_version is not None
+-                    and state is not None
+-                    and (draft_req.spec_cnt, incoming_version)
+-                    < (state.spec_cnt, state.fission_version)
++                    identity_required
++                    and not fission_control_matches(
++                        (state.spec_cnt, state.fission_version),
++                        draft_req.spec_cnt,
++                        incoming_version,
++                        require_identity=True,
++                    )
+                 ):
+                     if self.tp_rank == 0:
+                         logger.debug(
+-                            "[Draft] ignored stale control for %s: (%s, %s) < (%s, %s)",
++                            "[Draft] ignored nonmatching fission control for %s: "
++                            "(%s, %s) != (%s, %s)",
+                             draft_req.request_id,
+                             draft_req.spec_cnt,
+                             incoming_version,
+@@ -502,6 +530,25 @@ class SpectreDraftSchedulerMixin:
+             try:
+                 state = self._get_draft_state(req_id)
+ 
++                incoming_version = getattr(draft_req, "fission_version", None)
++                incoming_key = fission_wire_key(
++                    draft_req.spec_cnt,
++                    incoming_version,
++                    require_version=(
++                        state.fission_identity_required if state is not None else False
++                    ),
++                )
++                if incoming_key is None or (
++                    state is not None
++                    and incoming_key < (state.spec_cnt, state.fission_version)
++                ):
++                    if self.tp_rank == 0:
++                        logger.debug(
++                            "[Draft] ignored stale or incomplete identity for %s",
++                            req_id,
++                        )
++                    continue
++
+                 if state is None:
+                     if draft_req.input_ids is None:
+                         if self.tp_rank == 0:
+@@ -523,9 +570,12 @@ class SpectreDraftSchedulerMixin:
+ 
+                 req.target_send_time = draft_req.target_send_time
+                 req.draft_recv_time = draft_req.draft_recv_time
+-                req.fission_version = getattr(draft_req, "fission_version", None) or 0
+-                state.spec_cnt = draft_req.spec_cnt
++                req.fission_version = incoming_key[1]
++                state.spec_cnt = incoming_key[0]
+                 state.fission_version = req.fission_version
++                state.fission_identity_required = (
++                    state.fission_identity_required or incoming_version is not None
++                )
+ 
+                 if draft_req.input_ids is not None:
+                     target_input = draft_req.input_ids
+@@ -1067,7 +1117,13 @@ class SpectreDraftSchedulerMixin:
+         )
+ 
+         req.spec_cnt = draft_req.spec_cnt
+-        req.fission_version = getattr(draft_req, "fission_version", None) or 0
++        incoming_version = getattr(draft_req, "fission_version", None)
++        wire_key = fission_wire_key(
++            draft_req.spec_cnt, incoming_version, require_version=False
++        )
++        if wire_key is None:
++            raise ValueError("malformed draft identity reached request creation")
++        req.fission_version = wire_key[1]
+         req.spec_type = SpecType.DRAFT_REQUEST
+         req.tokenizer = self.tokenizer
+         req.logprob_start_len = len(req.origin_input_ids) - 1
+@@ -1085,7 +1141,8 @@ class SpectreDraftSchedulerMixin:
+             SpectreDraftState(
+                 req_id=req_id,
+                 spec_cnt=draft_req.spec_cnt,
+-                fission_version=getattr(draft_req, "fission_version", None) or 0,
++                fission_version=wire_key[1],
++                fission_identity_required=incoming_version is not None,
+                 req_object=req,
+                 location=DraftReqLocation.DRAFT_WAITING,
+                 target_origin_input_ids=(
+diff --git a/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py b/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py
+index b76b40e27..781dec07c 100644
+--- a/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py
++++ b/python/sglang/srt/speculative/spectre/drafter/spectre_state_manager.py
+@@ -16,6 +16,7 @@ class SpectreDraftState:
+     spec_cnt: int
+     req_object: Optional["Req"]
+     fission_version: int = 0
++    fission_identity_required: bool = False
+     location: str = "waiting_queue"
+     target_origin_input_ids: Optional[List[int]] = None
+     last_prefix_length: int = 0
+diff --git a/python/sglang/srt/speculative/spectre/fission_state.py b/python/sglang/srt/speculative/spectre/fission_state.py
+index 1312969dd..ab15d3923 100644
+--- a/python/sglang/srt/speculative/spectre/fission_state.py
++++ b/python/sglang/srt/speculative/spectre/fission_state.py
+@@ -47,6 +47,55 @@ def fission_enabled(environ: Optional[dict[str, str]] = None) -> bool:
+     }
+ 
+ 
++def fission_wire_key(
++    spec_cnt: object,
++    fission_version: object,
++    *,
++    require_version: bool,
++) -> Optional[tuple[int, int]]:
++    """Return a validated wire key, or ``None`` for an incomplete identity.
++
++    Legacy SPECTRE messages omit ``fission_version`` and remain decodable while
++    fission is disabled. Once either endpoint requires fission identity, a
++    missing, boolean, negative, or non-integer component fails closed.
++    """
++
++    if (
++        isinstance(spec_cnt, bool)
++        or not isinstance(spec_cnt, int)
++        or spec_cnt < 0
++    ):
++        return None
++    if fission_version is None:
++        return None if require_version else (spec_cnt, 0)
++    if (
++        isinstance(fission_version, bool)
++        or not isinstance(fission_version, int)
++        or fission_version < 0
++    ):
++        return None
++    return (spec_cnt, fission_version)
++
++
++def fission_control_matches(
++    current_key: tuple[int, int],
++    spec_cnt: object,
++    fission_version: object,
++    *,
++    require_identity: bool,
++) -> bool:
++    """Return whether a FINISH/ABORT message may mutate the current state."""
++
++    if not require_identity:
++        return True
++    incoming_key = fission_wire_key(
++        spec_cnt,
++        fission_version,
++        require_version=True,
++    )
++    return incoming_key == current_key
++
++
+ @dataclass(frozen=True, order=True)
+ class FissionKey:
+     request_id: str
+diff --git a/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py b/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
+index 6d2862c45..7a68ae165 100644
+--- a/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
++++ b/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
+@@ -20,6 +20,7 @@ from sglang.srt.speculative.spectre.fission_state import (
+     FissionOutcome,
+     FissionStateTable,
+     fission_enabled,
++    fission_wire_key,
+ )
+ from sglang.srt.speculative.spectre.spectre_protocol import (
+     is_health_check_req as _is_health_check,
+@@ -194,9 +195,13 @@ class SchedulerSpectreTargetMixin:
+         return req.spec_cnt
+ 
+     def _spectre_cache_key_for_msg(self, msg: SpectreRequest) -> Any:
+-        if getattr(self, "_spectre_fission_enabled", False):
+-            return (msg.spec_cnt, getattr(msg, "fission_version", None) or 0)
+-        return msg.spec_cnt
++        if not getattr(self, "_spectre_fission_enabled", False):
++            return msg.spec_cnt
++        return fission_wire_key(
++            msg.spec_cnt,
++            getattr(msg, "fission_version", None),
++            require_version=True,
++        )
+ 
+     @staticmethod
+     def _spectre_cache_key_spec_cnt(cache_key: Any) -> int:
+@@ -205,6 +210,8 @@ class SchedulerSpectreTargetMixin:
+     def _should_store_draft_message(self, msg: SpectreRequest) -> bool:
+         rid_cache = getattr(self, "req_to_draft_token", {}).get(msg.request_id)
+         cache_key = self._spectre_cache_key_for_msg(msg)
++        if cache_key is None:
++            return False
+         if rid_cache is None or cache_key not in rid_cache:
+             return False
+ 
+diff --git a/test/srt/test_spectre_fission_scheduler.py b/test/srt/test_spectre_fission_scheduler.py
+index ffe3e0d7f..ae26e1b2f 100644
+--- a/test/srt/test_spectre_fission_scheduler.py
++++ b/test/srt/test_spectre_fission_scheduler.py
+@@ -282,6 +282,49 @@ class TestFissionSchedulerHooks(unittest.TestCase):
+             ([11], [0.1]),
+         )
+ 
++    def test_incomplete_or_malformed_fission_reply_cannot_fill_version_zero(self):
++        req = _FakeReq()
++        req.spec_cnt = 3
++        scheduler = _FakeScheduler(_FakeBatch([req]))
++        scheduler.req_to_draft_token[req.rid][(3, 0)] = None
++        missing = _Request(
++            request_id=req.rid,
++            spec_cnt=3,
++            fission_version=None,
++            action=_Action.DRAFT,
++            draft_token_ids=[11],
++            draft_logprobs=[0.1],
++            target_send_time=-1.0,
++        )
++        malformed = _Request(
++            request_id=req.rid,
++            spec_cnt=3,
++            fission_version=-1,
++            action=_Action.DRAFT,
++            draft_token_ids=[12],
++            draft_logprobs=[0.2],
++            target_send_time=-1.0,
++        )
++        complete = _Request(
++            request_id=req.rid,
++            spec_cnt=3,
++            fission_version=0,
++            action=_Action.DRAFT,
++            draft_token_ids=[13],
++            draft_logprobs=[0.3],
++            target_send_time=-1.0,
++        )
++
++        TARGET.SchedulerSpectreTargetMixin._store_messages(
++            scheduler, [missing, malformed]
++        )
++        self.assertIsNone(scheduler.req_to_draft_token[req.rid][(3, 0)])
++        TARGET.SchedulerSpectreTargetMixin._store_messages(scheduler, [complete])
++        self.assertEqual(
++            scheduler.req_to_draft_token[req.rid][(3, 0)],
++            ([13], [0.3]),
++        )
++
+     def test_cancel_fences_parked_recovery_and_reinserts_for_cleanup(self):
+         scheduler, batch, req = self._recovering_scheduler()
+         scheduler._fission_commit_outcomes_and_park(batch)
+diff --git a/test/srt/test_spectre_fission_state.py b/test/srt/test_spectre_fission_state.py
+index ecd2d7a7b..4061cad58 100644
+--- a/test/srt/test_spectre_fission_state.py
++++ b/test/srt/test_spectre_fission_state.py
+@@ -19,7 +19,9 @@ FissionKey = _MODULE.FissionKey
+ FissionLane = _MODULE.FissionLane
+ FissionOutcome = _MODULE.FissionOutcome
+ FissionStateTable = _MODULE.FissionStateTable
++fission_control_matches = _MODULE.fission_control_matches
+ fission_enabled = _MODULE.fission_enabled
++fission_wire_key = _MODULE.fission_wire_key
+ 
+ 
+ class TestFissionStateTable(unittest.TestCase):
+@@ -28,6 +30,52 @@ class TestFissionStateTable(unittest.TestCase):
+         self.assertFalse(fission_enabled({"SGLANG_SPECTRE_FISSION": "garbage"}))
+         self.assertTrue(fission_enabled({"SGLANG_SPECTRE_FISSION": "true"}))
+ 
++    def test_wire_key_requires_complete_nonnegative_integer_identity(self):
++        self.assertEqual(
++            fission_wire_key(3, None, require_version=False),
++            (3, 0),
++        )
++        self.assertIsNone(fission_wire_key(3, None, require_version=True))
++        for spec_cnt, version in (
++            (True, 0),
++            (-1, 0),
++            (3, False),
++            (3, -1),
++            (3, "1"),
++        ):
++            self.assertIsNone(
++                fission_wire_key(spec_cnt, version, require_version=True)
++            )
++
++    def test_versioned_control_requires_an_exact_complete_key(self):
++        current = (3, 7)
++        self.assertTrue(
++            fission_control_matches(
++                current, 3, 7, require_identity=True
++            )
++        )
++        for spec_cnt, version in (
++            (3, None),
++            (3, 6),
++            (3, 8),
++            (2, 7),
++            (4, 7),
++            (3, -1),
++        ):
++            self.assertFalse(
++                fission_control_matches(
++                    current,
++                    spec_cnt,
++                    version,
++                    require_identity=True,
++                )
++            )
++        self.assertTrue(
++            fission_control_matches(
++                current, 999, None, require_identity=False
++            )
++        )
++
+     def _verifying(
+         self, rid: str = "r0", spec_cnt: int = 7
+     ) -> tuple[FissionStateTable, FissionKey]:
+-- 
+2.39.5 (Apple Git-154)
+

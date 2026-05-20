@@ -1,0 +1,936 @@
+From d185cec580f99a045701092f269e8907b11f1fb8 Mon Sep 17 00:00:00 2001
+From: FissionSpec contributors <fissionspec@users.noreply.github.com>
+Date: Thu, 23 Jul 2026 11:24:05 -0700
+Subject: [PATCH 2/5] feat(spectre): park misses for async recovery
+
+---
+ .../spectre_target_scheduler_mixin.py         | 378 ++++++++++++++++--
+ .../spectre/verifier/spectre_worker.py        |  26 +-
+ test/srt/test_spectre_fission_scheduler.py    | 287 +++++++++++++
+ 3 files changed, 660 insertions(+), 31 deletions(-)
+ create mode 100644 test/srt/test_spectre_fission_scheduler.py
+
+diff --git a/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py b/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
+index 35f64ea89..2089cc015 100644
+--- a/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
++++ b/python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py
+@@ -2,8 +2,9 @@ import logging
+ import os
+ import threading
+ import time
++from bisect import bisect_left
+ from collections import defaultdict
+-from typing import Dict, List, Optional, Set, Tuple
++from typing import Any, Dict, List, Optional, Set, Tuple
+ 
+ from sglang.srt.environ import envs
+ from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
+@@ -13,6 +14,13 @@ from sglang.srt.speculative.spectre.spectre_protocol import (
+     SpectreRequest,
+     SpecType,
+ )
++from sglang.srt.speculative.spectre.fission_state import (
++    FissionEventResult,
++    FissionLane,
++    FissionOutcome,
++    FissionStateTable,
++    fission_enabled,
++)
+ from sglang.srt.speculative.spectre.spectre_protocol import (
+     is_health_check_req as _is_health_check,
+ )
+@@ -100,6 +108,13 @@ class SchedulerSpectreTargetMixin:
+         self._bg_running = True
+         self._spectre_flush_at_us = 0.0
+         self._accept_reject_messages = True
++        self._spectre_fission_enabled = fission_enabled()
++        self._fission_state = FissionStateTable()
++        self._fission_parked: Dict[str, Req] = {}
++        self._fission_recovery_timeout_ns = int(
++            float(os.environ.get("SGLANG_SPECTRE_FISSION_TIMEOUT_MS", "200"))
++            * 1_000_000
++        )
+ 
+         failure_threshold = int(os.environ.get("SPECTRE_FAILURE_THRESHOLD", "30"))
+         cooldown_rounds = int(os.environ.get("SPECTRE_COOLDOWN_ROUNDS", "100"))
+@@ -168,10 +183,29 @@ class SchedulerSpectreTargetMixin:
+             self.is_rejected = False
+         if hasattr(self, "rejected_forward_ct"):
+             self.rejected_forward_ct = 0
++        if hasattr(self, "_fission_state"):
++            self._fission_state = FissionStateTable()
++        if hasattr(self, "_fission_parked"):
++            self._fission_parked.clear()
++
++    def _spectre_cache_key_for_req(self, req: Req) -> Any:
++        if getattr(self, "_spectre_fission_enabled", False):
++            return (req.spec_cnt, getattr(req, "fission_version", 0))
++        return req.spec_cnt
++
++    def _spectre_cache_key_for_msg(self, msg: SpectreRequest) -> Any:
++        if getattr(self, "_spectre_fission_enabled", False):
++            return (msg.spec_cnt, getattr(msg, "fission_version", None) or 0)
++        return msg.spec_cnt
++
++    @staticmethod
++    def _spectre_cache_key_spec_cnt(cache_key: Any) -> int:
++        return cache_key[0] if isinstance(cache_key, tuple) else cache_key
+ 
+     def _should_store_draft_message(self, msg: SpectreRequest) -> bool:
+         rid_cache = getattr(self, "req_to_draft_token", {}).get(msg.request_id)
+-        if rid_cache is None or msg.spec_cnt not in rid_cache:
++        cache_key = self._spectre_cache_key_for_msg(msg)
++        if rid_cache is None or cache_key not in rid_cache:
+             return False
+ 
+         flush_at_us = getattr(self, "_spectre_flush_at_us", 0.0)
+@@ -188,7 +222,7 @@ class SchedulerSpectreTargetMixin:
+     @DynamicGradMode()
+     def event_loop_normal_spectre_target(self):
+         self.req_to_draft_token: Dict[
+-            str, Dict[int, Optional[Tuple[List[int], List[float]]]]
++            str, Dict[Any, Optional[Tuple[List[int], List[float]]]]
+         ] = defaultdict(dict)
+         self.is_rejected: bool = False
+         self.rejected_forward_ct: int = 0
+@@ -201,6 +235,8 @@ class SchedulerSpectreTargetMixin:
+             if self._engine_paused:
+                 continue
+ 
++            if self._spectre_fission_enabled:
++                self._fission_poll_recoveries()
+             batch = self.get_next_batch_to_run()
+             self.cur_batch = batch
+ 
+@@ -213,15 +249,46 @@ class SchedulerSpectreTargetMixin:
+                     batch.recv_draft_fn = None
+                 else:
+                     draft_num_tokens = self._decide_speculative_num_draft_tokens(batch)
+-                    self.send_batch_draft_requests(batch, draft_num_tokens)
+-                    batch.draft_num_tokens = self._decide_verify_num_draft_tokens(batch)
+-                    batch.recv_draft_fn = self.recv_drafts_for_batch
+-                    batch.retry_fn = self.retry_drafts_for_reqs
++                    if not self._spectre_fission_enabled:
++                        # Preserve the original SPECTRE ordering: sending may
++                        # clear is_rejected before width selection.
++                        self.send_batch_draft_requests(batch, draft_num_tokens)
++                        batch.draft_num_tokens = self._decide_verify_num_draft_tokens(
++                            batch
++                        )
++                        batch.recv_draft_fn = self.recv_drafts_for_batch
++                        batch.retry_fn = self.retry_drafts_for_reqs
++                    else:
++                        if (
++                            self.is_rejected
++                            and self.server_args.spectre_reject_interval > 0
++                            and (
++                                (self.forward_ct - self.rejected_forward_ct + 1)
++                                % self.server_args.spectre_reject_interval
++                                == 0
++                            )
++                        ):
++                            # This is the probe round that the original send
++                            # path uses to clear rejection.
++                            self.is_rejected = False
++                        batch.draft_num_tokens = self._decide_verify_num_draft_tokens(
++                            batch
++                        )
++                        if batch.draft_num_tokens > 1:
++                            self.send_batch_draft_requests(batch, draft_num_tokens)
++                            batch.recv_draft_fn = self.recv_drafts_for_batch
++                        else:
++                            batch.recv_draft_fn = None
++                        batch.retry_fn = None
+                     batch.retry_fail_ratio = self.server_args.spectre_retry_fail_ratio
+                     batch.retry_min_count = self.server_args.spectre_retry_min_count
+ 
++                if self._spectre_fission_enabled:
++                    self._fission_log_shape(batch)
+                 result = self.run_batch(batch)
+                 self.process_batch_result(batch, result)
++                if self._spectre_fission_enabled:
++                    self._fission_commit_outcomes_and_park(batch)
+             else:
+                 self.self_check_during_idle()
+ 
+@@ -232,7 +299,7 @@ class SchedulerSpectreTargetMixin:
+     def _collect_draft_messages(
+         self,
+         pending_rids: Set[str],
+-        pending_spec_cnts: Dict[str, int],
++        pending_cache_keys: Dict[str, Any],
+         timeout_s: float,
+     ) -> List[SpectreRequest]:
+         all_messages: List[SpectreRequest] = []
+@@ -247,8 +314,11 @@ class SchedulerSpectreTargetMixin:
+                         continue
+                     if msg.request_id not in pending_rids:
+                         continue
+-                    expected_sc = pending_spec_cnts.get(msg.request_id)
+-                    if expected_sc is None or msg.spec_cnt == expected_sc:
++                    expected_key = pending_cache_keys.get(msg.request_id)
++                    if (
++                        expected_key is None
++                        or self._spectre_cache_key_for_msg(msg) == expected_key
++                    ):
+                         pending_rids.discard(msg.request_id)
+                 if not pending_rids:
+                     break
+@@ -280,9 +350,9 @@ class SchedulerSpectreTargetMixin:
+     def _store_messages(self, messages: List[SpectreRequest]) -> bool:
+         has_draft = False
+         for msg in messages:
+-            assert isinstance(
+-                msg, SpectreRequest
+-            ), f"Expected SpectreRequest, got {type(msg)}"
++            assert isinstance(msg, SpectreRequest), (
++                f"Expected SpectreRequest, got {type(msg)}"
++            )
+             if msg.action == SpectreAction.REJECT:
+                 if getattr(self, "_accept_reject_messages", True):
+                     self.process_reject_action()
+@@ -293,7 +363,15 @@ class SchedulerSpectreTargetMixin:
+             elif msg.action == SpectreAction.DRAFT:
+                 if not self._should_store_draft_message(msg):
+                     continue
+-                self.req_to_draft_token[msg.request_id][msg.spec_cnt] = (
++                cache_key = self._spectre_cache_key_for_msg(msg)
++                if (
++                    self._spectre_fission_enabled
++                    and self.req_to_draft_token[msg.request_id][cache_key] is not None
++                ):
++                    # First matching completion wins; duplicates cannot replace
++                    # a payload that has already passed the version fence.
++                    continue
++                self.req_to_draft_token[msg.request_id][cache_key] = (
+                     msg.draft_token_ids,
+                     msg.draft_logprobs,
+                 )
+@@ -308,17 +386,22 @@ class SchedulerSpectreTargetMixin:
+         for req in reqs:
+             if _is_health_check(req):
+                 continue
+-            rid, sc = req.rid, req.spec_cnt
++            rid = req.rid
++            cache_key = self._spectre_cache_key_for_req(req)
+             rid_cache = self.req_to_draft_token.get(rid)
+             if rid_cache is None:
+                 continue
+ 
+-            entry = rid_cache.get(sc)
++            entry = rid_cache.get(cache_key)
+             if entry is not None:
+                 result[rid] = entry
+-                del rid_cache[sc]
++                del rid_cache[cache_key]
+ 
+-            stale_keys = [k for k in list(rid_cache.keys()) if k < sc]
++            stale_keys = [
++                k
++                for k in list(rid_cache.keys())
++                if self._spectre_cache_key_spec_cnt(k) < req.spec_cnt
++            ]
+             for k in stale_keys:
+                 del rid_cache[k]
+ 
+@@ -353,17 +436,25 @@ class SchedulerSpectreTargetMixin:
+             pending_rids = {
+                 req.rid
+                 for req in reqs_waiting_for_drafts
+-                if req.spec_cnt in self.req_to_draft_token.get(req.rid, {})
+-                and self.req_to_draft_token[req.rid][req.spec_cnt] is None
++                if self._spectre_cache_key_for_req(req)
++                in self.req_to_draft_token.get(req.rid, {})
++                and self.req_to_draft_token[req.rid][
++                    self._spectre_cache_key_for_req(req)
++                ]
++                is None
+             }
+             messages = (
+                 self._collect_draft_messages(
+                     pending_rids=pending_rids,
+-                    pending_spec_cnts={
+-                        req.rid: req.spec_cnt
++                    pending_cache_keys={
++                        req.rid: self._spectre_cache_key_for_req(req)
+                         for req in reqs_waiting_for_drafts
+-                        if req.spec_cnt in self.req_to_draft_token.get(req.rid, {})
+-                        and self.req_to_draft_token[req.rid][req.spec_cnt] is None
++                        if self._spectre_cache_key_for_req(req)
++                        in self.req_to_draft_token.get(req.rid, {})
++                        and self.req_to_draft_token[req.rid][
++                            self._spectre_cache_key_for_req(req)
++                        ]
++                        is None
+                     },
+                     timeout_s=self._recv_timeout_s,
+                 )
+@@ -394,21 +485,23 @@ class SchedulerSpectreTargetMixin:
+         for req in failed_reqs:
+             if _is_health_check(req):
+                 continue
+-            self.req_to_draft_token[req.rid][req.spec_cnt] = None
++            self.req_to_draft_token[req.rid][self._spectre_cache_key_for_req(req)] = (
++                None
++            )
+ 
+         if self.tp_size == 1 or self.tp_rank == 0:
+             self._send_retry_requests(failed_reqs, max(1, num_draft_tokens - 1))
+ 
+         if self.tp_size == 1 or self.tp_rank == 0:
+             pending_rids = {req.rid for req in failed_reqs if not _is_health_check(req)}
+-            pending_spec_cnts = {
+-                req.rid: req.spec_cnt
++            pending_cache_keys = {
++                req.rid: self._spectre_cache_key_for_req(req)
+                 for req in failed_reqs
+                 if not _is_health_check(req)
+             }
+             messages = self._collect_draft_messages(
+                 pending_rids=pending_rids,
+-                pending_spec_cnts=pending_spec_cnts,
++                pending_cache_keys=pending_cache_keys,
+                 timeout_s=self._recv_timeout_s * 0.5,
+             )
+         else:
+@@ -437,14 +530,34 @@ class SchedulerSpectreTargetMixin:
+         self.is_rejected = False
+ 
+         reqs_to_send: List[Req] = []
++        fission_decode = (
++            self._spectre_fission_enabled and batch.forward_mode == ForwardMode.DECODE
++        )
++        if fission_decode:
++            batch.fission_enabled = True
++            batch.fission_keys = {}
+ 
+         for req in batch.reqs:
+             if _is_health_check(req):
+                 continue
++            if fission_decode:
++                now_ns = time.monotonic_ns()
++                self._fission_state.ensure(req.rid, req.spec_cnt, now_ns)
++                event_result, key = self._fission_state.begin_verify(req.rid)
++                if event_result not in {
++                    FissionEventResult.APPLIED,
++                    FissionEventResult.DUPLICATE,
++                }:
++                    self._fission_state.force_bypass(req.rid, now_ns)
++                    continue
++                assert key is not None
++                req.fission_version = key.fission_version
++                batch.fission_keys[req.rid] = key
+             rid_cache = self.req_to_draft_token[req.rid]
+-            if req.spec_cnt in rid_cache:
++            cache_key = self._spectre_cache_key_for_req(req)
++            if cache_key in rid_cache:
+                 continue
+-            rid_cache[req.spec_cnt] = None
++            rid_cache[cache_key] = None
+             reqs_to_send.append(req)
+ 
+         if self.tp_size == 1 or self.tp_rank == 0:
+@@ -459,6 +572,11 @@ class SchedulerSpectreTargetMixin:
+                         SpectreRequest(
+                             request_id=req.rid,
+                             spec_cnt=req.spec_cnt,
++                            fission_version=(
++                                getattr(req, "fission_version", 0)
++                                if fission_decode
++                                else None
++                            ),
+                             action=SpectreAction.DRAFT,
+                             spec_type=SpecType.DRAFT_REQUEST,
+                             input_ids=(
+@@ -487,6 +605,11 @@ class SchedulerSpectreTargetMixin:
+             SpectreRequest(
+                 request_id=req.rid,
+                 spec_cnt=req.spec_cnt,
++                fission_version=(
++                    getattr(req, "fission_version", 0)
++                    if self._spectre_fission_enabled
++                    else None
++                ),
+                 action=SpectreAction.DRAFT,
+                 spec_type=SpecType.DRAFT_REQUEST,
+                 output_ids=req.output_ids,
+@@ -518,6 +641,11 @@ class SchedulerSpectreTargetMixin:
+         msg = SpectreRequest(
+             request_id=req.rid,
+             spec_cnt=req.spec_cnt,
++            fission_version=(
++                getattr(req, "fission_version", 0)
++                if getattr(self, "_spectre_fission_enabled", False)
++                else None
++            ),
+             action=action,
+             spec_type=SpecType.DRAFT_REQUEST,
+             input_ids=[],
+@@ -539,6 +667,190 @@ class SchedulerSpectreTargetMixin:
+                     f"\033[34m [Target][Notify] Failed to cleanup req_to_draft_token "
+                     f"for {req.rid}: {e} \033[0m"
+                 )
++        if getattr(self, "_spectre_fission_enabled", False):
++            if action == SpectreAction.ABORT:
++                self._fission_state.cancel(req.rid, req.spec_cnt)
++            else:
++                self._fission_state.finish(req.rid, req.spec_cnt)
++            self._fission_parked.pop(req.rid, None)
++
++    def _fission_commit_outcomes_and_park(self, batch: ScheduleBatch) -> None:
++        outcomes = getattr(batch, "fission_outcomes", ())
++        keys = getattr(batch, "fission_keys", {})
++        if not outcomes or not keys:
++            return
++
++        now_ns = time.monotonic_ns()
++        req_by_rid = {req.rid: req for req in batch.reqs}
++        recovering: List[Req] = []
++
++        for event in outcomes:
++            rid = event.key.request_id
++            req = req_by_rid.get(rid)
++            if req is None or keys.get(rid) != event.key:
++                continue
++
++            record = self._fission_state.get(rid)
++            if record is not None and record.lane in {
++                FissionLane.FINISHED,
++                FissionLane.CANCELLED,
++            }:
++                continue
++
++            event_result, next_key = self._fission_state.post_verify(
++                event.key,
++                event.outcome,
++                event.next_spec_cnt,
++                now_ns,
++            )
++            if event_result != FissionEventResult.APPLIED or next_key is None:
++                continue
++            req.fission_version = next_key.fission_version
++            req.fission_lane = self._fission_state.get(rid).lane.value
++
++            if event.outcome == FissionOutcome.RECOVERING and not req.finished():
++                recovering.append(req)
++                self._fission_parked[rid] = req
++                cache_key = self._spectre_cache_key_for_req(req)
++                self.req_to_draft_token[rid][cache_key] = None
++
++        if recovering:
++            recovering_ids = {id(req) for req in recovering}
++            keep_indices = [
++                index
++                for index, req in enumerate(batch.reqs)
++                if id(req) not in recovering_ids
++            ]
++            # filter_batch only changes the target descriptor. It does not
++            # release req_pool_idx or target KV pages, which remain request-owned.
++            batch.filter_batch(
++                keep_indices=keep_indices,
++                v1_spec_info_filtered=True,
++            )
++            self._send_retry_requests(
++                recovering,
++                max(1, self.server_args.speculative_num_steps),
++            )
++
++    def _fission_poll_recoveries(self) -> None:
++        if self.tp_size == 1 or self.tp_rank == 0:
++            messages = self._drain_msg_buffer()
++        else:
++            messages = None
++        messages = self._tp_broadcast_messages(messages)
++        self._store_messages(messages)
++
++        now_ns = time.monotonic_ns()
++        if self.draft_circuit_breaker.state == DraftCircuitBreaker.OPEN:
++            for rid in tuple(self._fission_parked):
++                self._fission_state.force_bypass(rid, now_ns)
++        else:
++            expired = self._fission_state.expire(
++                now_ns,
++                self._fission_recovery_timeout_ns,
++            )
++            for _ in expired:
++                self.draft_circuit_breaker.record_failure()
++
++        ready: List[Req] = []
++        for rid, req in tuple(self._fission_parked.items()):
++            record = self._fission_state.get(rid)
++            if record is None:
++                continue
++            if record.lane == FissionLane.RECOVERING:
++                cache_key = self._spectre_cache_key_for_req(req)
++                rid_cache = self.req_to_draft_token.get(rid, {})
++                drafts = rid_cache.get(cache_key)
++                if drafts is not None:
++                    del rid_cache[cache_key]
++                    event_result = self._fission_state.complete_recovery(
++                        record.key, now_ns
++                    )
++                    if event_result == FissionEventResult.APPLIED:
++                        # Runtime import avoids a module initialization cycle.
++                        from sglang.srt.speculative.spectre.verifier.spectre_worker import (
++                            _apply_drafts_to_req,
++                        )
++
++                        _apply_drafts_to_req(
++                            req,
++                            verified_token=-1,
++                            drafts=drafts,
++                            skip_d0=False,
++                        )
++                        req.fission_lane = FissionLane.READY_BACKUP.value
++                        ready.append(req)
++                        self.draft_circuit_breaker.record_success()
++            elif record.lane == FissionLane.BYPASS:
++                req.cur_drafts = []
++                req.fission_version = record.key.fission_version
++                req.fission_lane = FissionLane.BYPASS.value
++                ready.append(req)
++
++        for req in ready:
++            self._fission_reinsert(req)
++
++    def _fission_reinsert(self, req: Req) -> None:
++        """Publish a parked request back into a target ScheduleBatch.
++
++        The helper reuses the existing req_pool_idx and therefore the target KV
++        owner. Runtime validation still has to prove that every attention
++        backend accepts this reconstructed descriptor before the feature can be
++        enabled by default.
++        """
++
++        record = self._fission_state.get(req.rid)
++        if record is None or record.lane not in {
++            FissionLane.READY_BACKUP,
++            FissionLane.BYPASS,
++        }:
++            return
++        if req.finished() or getattr(req, "is_retracted", False):
++            self._fission_parked.pop(req.rid, None)
++            return
++        try:
++            new_batch = self._build_hisparse_decode_batch([req])
++            if self.running_batch.is_empty():
++                self.running_batch = new_batch
++            else:
++                self.running_batch.merge_batch(new_batch)
++            self._fission_parked.pop(req.rid, None)
++        except Exception:
++            # Fail closed: leave the request parked and fence this completion.
++            # The timeout/circuit-breaker path cannot publish a descriptor that
++            # failed reconstruction.
++            self._fission_state.force_bypass(req.rid, time.monotonic_ns())
++            logger.exception(
++                "[FissionSpec] failed to reconstruct target descriptor for %s; "
++                "request remains parked",
++                req.rid,
++            )
++
++    def _fission_log_shape(self, batch: ScheduleBatch) -> None:
++        logical_rows = batch.batch_size() + len(self._fission_parked)
++        draft_width = max(1, getattr(batch, "draft_num_tokens", 1))
++        real_verifier_slots = batch.batch_size() * draft_width
++        capture_bs = sorted(getattr(self.server_args, "cuda_graph_bs", ()) or ())
++        graph_rows = batch.batch_size()
++        if capture_bs and graph_rows > 0:
++            index = bisect_left(capture_bs, graph_rows)
++            if index < len(capture_bs):
++                graph_rows = capture_bs[index]
++        graph_bucket_slots = graph_rows * draft_width
++        now_ns = time.monotonic_ns()
++        recovery_ages_ms = [
++            round(record.recovery_age_ns(now_ns) / 1_000_000, 3)
++            for record in self._fission_state.records()
++            if record.lane == FissionLane.RECOVERING
++        ]
++        logger.info(
++            "[FissionSpec] logical_rows=%d real_verifier_slots=%d "
++            "graph_bucket_slots=%d recovery_age_ms=%s",
++            logical_rows,
++            real_verifier_slots,
++            graph_bucket_slots,
++            recovery_ages_ms,
++        )
+ 
+     def _is_self_high_overhead_target(self, batch: ScheduleBatch) -> bool:
+         current_bsz = max(batch.batch_size(), self.running_batch.batch_size())
+@@ -564,6 +876,12 @@ class SchedulerSpectreTargetMixin:
+                 logger.info("\033[34m [Target] draft_num_tokens=1 (rejected) \033[0m")
+             return 1
+ 
++        if self._spectre_fission_enabled:
++            for req in batch.reqs:
++                record = self._fission_state.get(req.rid)
++                if record is not None and record.lane == FissionLane.BYPASS:
++                    return 1
++
+         no_draft_reqs = sum(
+             1 for req in batch.reqs if not _is_health_check(req) and not req.cur_drafts
+         )
+diff --git a/python/sglang/srt/speculative/spectre/verifier/spectre_worker.py b/python/sglang/srt/speculative/spectre/verifier/spectre_worker.py
+index 01a775031..2dc886e2c 100644
+--- a/python/sglang/srt/speculative/spectre/verifier/spectre_worker.py
++++ b/python/sglang/srt/speculative/spectre/verifier/spectre_worker.py
+@@ -23,6 +23,10 @@ from sglang.srt.speculative.eagle_utils import (
+ )
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+ from sglang.srt.speculative.spec_utils import maybe_detect_nan
++from sglang.srt.speculative.spectre.fission_state import (
++    FissionOutcome,
++    FissionOutcomeEvent,
++)
+ from sglang.srt.speculative.spectre.spectre_protocol import (
+     is_health_check_req as _is_health_check,
+ )
+@@ -368,6 +372,9 @@ class SpectreWorker:
+         retry_min_count: int = 4,
+     ):
+         failed_reqs: List = []
++        fission_enabled = bool(getattr(batch, "fission_enabled", False))
++        if fission_enabled:
++            batch.fission_outcomes = []
+ 
+         for i, req in enumerate(batch.reqs):
+             if _is_health_check(req):
+@@ -392,17 +399,32 @@ class SpectreWorker:
+                     req.draft_tokens_and_logits = _make_draft_dict(
+                         draft_token_ids[1:], draft_logprobs[1:]
+                     )
++                    fission_outcome = FissionOutcome.HIT
+                 else:
+                     req.cur_drafts = []
+                     req.draft_tokens_and_logits = _default_draft()
+                     failed_reqs.append(req)
++                    fission_outcome = FissionOutcome.RECOVERING
+             else:
+                 req.cur_drafts = []
+                 req.draft_tokens_and_logits = _default_draft()
+                 failed_reqs.append(req)
++                fission_outcome = FissionOutcome.RECOVERING
+ 
+             req.spec_cnt += 1
+             req.len_output_ids = len(req.output_ids)
++            if fission_enabled:
++                if req.finished():
++                    fission_outcome = FissionOutcome.FINISHED
++                key = getattr(batch, "fission_keys", {}).get(req.rid)
++                if key is not None:
++                    batch.fission_outcomes.append(
++                        FissionOutcomeEvent(
++                            key=key,
++                            outcome=fission_outcome,
++                            next_spec_cnt=req.spec_cnt,
++                        )
++                    )
+ 
+         bsz = sum(1 for req in batch.reqs if not _is_health_check(req))
+         should_retry = (
+@@ -412,7 +434,9 @@ class SpectreWorker:
+             and bsz > retry_min_count
+             and len(failed_reqs) / bsz > retry_fail_ratio
+         )
+-        if should_retry:
++        # Fission mode parks failed rows and dispatches recovery from the
++        # scheduler event loop. It must never synchronously retry here.
++        if should_retry and not fission_enabled:
+             retry_drafts = retry_fn(failed_reqs)
+             for req in failed_reqs:
+                 _apply_drafts_to_req(
+diff --git a/test/srt/test_spectre_fission_scheduler.py b/test/srt/test_spectre_fission_scheduler.py
+new file mode 100644
+index 000000000..6fc17eab2
+--- /dev/null
++++ b/test/srt/test_spectre_fission_scheduler.py
+@@ -0,0 +1,287 @@
++from collections import defaultdict
++import importlib.util
++from pathlib import Path
++import sys
++from types import ModuleType, SimpleNamespace
++import unittest
++
++_ROOT = Path(__file__).resolve().parents[2]
++_FISSION_SOURCE = _ROOT / "python/sglang/srt/speculative/spectre/fission_state.py"
++_TARGET_SOURCE = (
++    _ROOT
++    / "python/sglang/srt/speculative/spectre/verifier"
++    / "spectre_target_scheduler_mixin.py"
++)
++
++
++def _load(name, source):
++    spec = importlib.util.spec_from_file_location(name, source)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def _stub(name, **members):
++    module = ModuleType(name)
++    for key, value in members.items():
++        setattr(module, key, value)
++    sys.modules[name] = module
++    return module
++
++
++class _DynamicGradMode:
++    def __call__(self, function):
++        return function
++
++
++class _Action:
++    DRAFT = "draft"
++    FINISH = "finish"
++    ABORT = "abort"
++    REJECT = "reject"
++
++
++class _Request:
++    def __init__(self, **values):
++        self.__dict__.update(values)
++
++
++class _SpecType:
++    DRAFT_REQUEST = "draft_request"
++
++
++class _ForwardMode:
++    DECODE = "decode"
++    EXTEND = "extend"
++
++
++class _FakeReq:
++    def __init__(self, rid="r0"):
++        self.rid = rid
++        self.spec_cnt = 0
++        self.fission_version = 0
++        self.req_pool_idx = 37
++        self.cur_drafts = []
++        self.output_ids = [101]
++        self.origin_input_ids = [100]
++        self.is_retracted = False
++        self._finished = False
++
++    def finished(self):
++        return self._finished
++
++
++class _FakeBatch:
++    def __init__(self, reqs):
++        self.reqs = list(reqs)
++        self.forward_mode = _ForwardMode.DECODE
++        self.fission_keys = {}
++        self.fission_outcomes = []
++        self.filter_calls = []
++
++    def batch_size(self):
++        return len(self.reqs)
++
++    def is_empty(self):
++        return not self.reqs
++
++    def filter_batch(self, *, keep_indices, v1_spec_info_filtered):
++        self.filter_calls.append((tuple(keep_indices), v1_spec_info_filtered))
++        self.reqs = [self.reqs[index] for index in keep_indices]
++
++    def merge_batch(self, other):
++        self.reqs.extend(other.reqs)
++
++
++def _load_target_module():
++    fission = _load(
++        "sglang.srt.speculative.spectre.fission_state",
++        _FISSION_SOURCE,
++    )
++    _stub(
++        "sglang.srt.environ",
++        envs=SimpleNamespace(
++            SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY=SimpleNamespace(
++                get=lambda: False
++            )
++        ),
++    )
++    _stub(
++        "sglang.srt.managers.schedule_batch",
++        Req=_FakeReq,
++        ScheduleBatch=_FakeBatch,
++    )
++    _stub(
++        "sglang.srt.model_executor.forward_batch_info",
++        ForwardMode=_ForwardMode,
++    )
++    _stub(
++        "sglang.srt.speculative.spectre.spectre_protocol",
++        SpectreAction=_Action,
++        SpectreRequest=_Request,
++        SpecType=_SpecType,
++        is_health_check_req=lambda req: False,
++    )
++    _stub(
++        "sglang.srt.utils",
++        DynamicGradMode=_DynamicGradMode,
++        broadcast_pyobj=lambda messages, *_args, **_kwargs: messages,
++    )
++    worker = _stub("sglang.srt.speculative.spectre.verifier.spectre_worker")
++
++    def apply_drafts(req, verified_token, drafts, *, skip_d0):
++        del verified_token
++        assert not skip_d0
++        req.cur_drafts = list(drafts[0])
++
++    worker._apply_drafts_to_req = apply_drafts
++    target = _load("spectre_target_scheduler_mixin_test", _TARGET_SOURCE)
++    return fission, target
++
++
++FISSION, TARGET = _load_target_module()
++
++
++class _FakeScheduler(TARGET.SchedulerSpectreTargetMixin):
++    def __init__(self, batch):
++        self._spectre_fission_enabled = True
++        self._fission_state = FISSION.FissionStateTable()
++        self._fission_parked = {}
++        self._fission_recovery_timeout_ns = 1_000_000_000_000
++        self.req_to_draft_token = defaultdict(dict)
++        self.server_args = SimpleNamespace(
++            speculative_num_steps=4,
++            cuda_graph_bs=[1, 2, 4, 8],
++        )
++        self.running_batch = batch
++        self.tp_size = 1
++        self.tp_rank = 0
++        self.draft_circuit_breaker = TARGET.DraftCircuitBreaker()
++        self.is_rejected = False
++        self.sent_recoveries = []
++
++    def _send_retry_requests(self, reqs, num_draft_tokens):
++        self.sent_recoveries.append((tuple(req.rid for req in reqs), num_draft_tokens))
++
++    def _drain_msg_buffer(self):
++        return []
++
++    def _tp_broadcast_messages(self, messages):
++        return messages or []
++
++    def _store_messages(self, _messages):
++        return False
++
++    def _build_hisparse_decode_batch(self, reqs):
++        return _FakeBatch(reqs)
++
++
++class TestFissionSchedulerHooks(unittest.TestCase):
++    def _recovering_scheduler(self):
++        req = _FakeReq()
++        batch = _FakeBatch([req])
++        scheduler = _FakeScheduler(batch)
++        scheduler._fission_state.ensure(req.rid, req.spec_cnt, 10)
++        result, key = scheduler._fission_state.begin_verify(req.rid)
++        self.assertEqual(result, FISSION.FissionEventResult.APPLIED)
++        batch.fission_keys[req.rid] = key
++        req.spec_cnt = 1
++        batch.fission_outcomes.append(
++            FISSION.FissionOutcomeEvent(
++                key=key,
++                outcome=FISSION.FissionOutcome.RECOVERING,
++                next_spec_cnt=1,
++            )
++        )
++        return scheduler, batch, req
++
++    def test_recovering_row_is_physically_removed_without_releasing_kv_owner(self):
++        scheduler, batch, req = self._recovering_scheduler()
++        original_pool_index = req.req_pool_idx
++
++        scheduler._fission_commit_outcomes_and_park(batch)
++
++        self.assertEqual(batch.reqs, [])
++        self.assertEqual(batch.filter_calls, [((), True)])
++        self.assertIs(scheduler._fission_parked[req.rid], req)
++        self.assertEqual(req.req_pool_idx, original_pool_index)
++        self.assertEqual(scheduler.sent_recoveries, [(("r0",), 4)])
++        self.assertIn((1, 1), scheduler.req_to_draft_token["r0"])
++
++    def test_matching_recovery_reinserts_ready_backup_once(self):
++        scheduler, batch, req = self._recovering_scheduler()
++        scheduler._fission_commit_outcomes_and_park(batch)
++        scheduler.req_to_draft_token["r0"][(1, 1)] = ([7, 8], [0.0, 0.0])
++
++        scheduler._fission_poll_recoveries()
++        scheduler._fission_poll_recoveries()
++
++        self.assertEqual([item.rid for item in scheduler.running_batch.reqs], ["r0"])
++        self.assertEqual(req.cur_drafts, [7, 8])
++        self.assertEqual(req.fission_lane, FISSION.FissionLane.READY_BACKUP.value)
++        self.assertNotIn(req.rid, scheduler._fission_parked)
++
++    def test_stale_recovery_cannot_reinsert(self):
++        scheduler, batch, req = self._recovering_scheduler()
++        scheduler._fission_commit_outcomes_and_park(batch)
++        scheduler.req_to_draft_token["r0"][(1, 0)] = ([7], [0.0])
++
++        scheduler._fission_poll_recoveries()
++
++        self.assertEqual(scheduler.running_batch.reqs, [])
++        self.assertIn(req.rid, scheduler._fission_parked)
++
++    def test_timeout_reinserts_as_one_token_bypass(self):
++        scheduler, batch, req = self._recovering_scheduler()
++        scheduler._fission_commit_outcomes_and_park(batch)
++        scheduler._fission_recovery_timeout_ns = 0
++
++        scheduler._fission_poll_recoveries()
++
++        self.assertEqual([item.rid for item in scheduler.running_batch.reqs], ["r0"])
++        self.assertEqual(req.cur_drafts, [])
++        self.assertEqual(req.fission_lane, FISSION.FissionLane.BYPASS.value)
++        self.assertEqual(
++            scheduler._decide_verify_num_draft_tokens(scheduler.running_batch),
++            1,
++        )
++
++    def test_first_matching_wire_completion_wins(self):
++        req = _FakeReq()
++        req.spec_cnt = 3
++        req.fission_version = 9
++        scheduler = _FakeScheduler(_FakeBatch([req]))
++        scheduler.req_to_draft_token[req.rid][(3, 9)] = None
++        first = _Request(
++            request_id=req.rid,
++            spec_cnt=3,
++            fission_version=9,
++            action=_Action.DRAFT,
++            draft_token_ids=[11],
++            draft_logprobs=[0.1],
++            target_send_time=-1.0,
++        )
++        duplicate = _Request(
++            request_id=req.rid,
++            spec_cnt=3,
++            fission_version=9,
++            action=_Action.DRAFT,
++            draft_token_ids=[99],
++            draft_logprobs=[0.9],
++            target_send_time=-1.0,
++        )
++
++        TARGET.SchedulerSpectreTargetMixin._store_messages(
++            scheduler, [first, duplicate]
++        )
++
++        self.assertEqual(
++            scheduler.req_to_draft_token[req.rid][(3, 9)],
++            ([11], [0.1]),
++        )
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.39.5 (Apple Git-154)
