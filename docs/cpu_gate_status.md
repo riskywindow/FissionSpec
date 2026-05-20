@@ -12,19 +12,20 @@ promotes a simulator result to accelerator evidence.
 | A. Token semantics | Complete | `semantics.py`, `micro_model.py`; exhaustive rational equality, schedule invariance, greedy/state equality, counter-addressed Monte Carlo, no-download neural-logit fixture | None inside the finite CPU domain |
 | B. Coordinator/fault safety | Complete | `coordinator.py`, `ledger.py`, `protocol.py`; canonical snapshot and enumerated crash/callback/OOM/cancel tests | Production durable storage and distributed leases are integration work, not reference-model claims |
 | C. Fidelity | Complete for declared one-round/reference strata | `fidelity.py`; finite paged LRU, correlated classes, context costs, causal multiworker draft service, jitter/failure/retry/backpressure, heterogeneous TTFT, exact null reductions | A unified multi-round engine event loop would extend fidelity but is not required for the one-round mechanism claims |
-| D. Baselines/oracle/controller | Core complete; parity audit active | `baselines.py`, `general_oracle.py`; matched pre-realized semantics, exact certificates, independent verifier, deterministic counterexamples | Shared Python/Rust fixture corpus and engine-seam state enumeration are in progress |
-| E. Statistics/workloads | Active | `statistics.py`, `workload_generators.py`, `artifacts.py`; paired effects, cluster bootstrap, confidence sequence, power planning, MMPP/Pareto/replay | Full predeclared 30-cluster matrix, held-out results, and byte-golden study artifacts are in progress |
-| F. Theory | Core complete; empirical-gap study active | `theory.py`, exact rational edge tests, `general_oracle.py` | Populate broad bounded-oracle gap and adversarial phase evidence |
+| D. Baselines/oracle/controller | Complete for declared CPU abstractions | `baselines.py`, `general_oracle.py`, shared Python/Rust fixtures, engine-adapter state enumeration, six exact certificates, independent verifier, deterministic counterexamples | Production baseline fidelity and engine timing require the pinned integration, not another CPU abstraction |
+| E. Statistics/workloads | Complete | `statistics.py`, `workload_generators.py`, `artifacts.py`, `run_cpu_completion_study.py`; 12 cells × 30 paired clusters, MMPP/Pareto/replay validation, simultaneous intervals, 3,240 complete traces, byte-golden bundle | None inside the frozen CPU study; real trace transport remains a registered integration measurement |
+| F. Theory | Complete for stated finite/analytical domain | `theory.py`, exact rational edge tests, `general_oracle.py`, six independently verified H2 gap instances and three adversarial witnesses | No universal H2 approximation guarantee is claimed; stronger guarantees would require additional assumptions |
 | G. Release/reproducibility | Active | existing Python/Rust CI and one-command checks | Clean sdist/wheel installs, typed package marker/API, coverage gates, MSRV matrix, archival environment, and complete CPU reproduction target are in progress |
-| H. Manuscript/claims | Structure complete; result population active | `paper/manuscript.md`, `claims_evidence.md`, dated `literature_matrix.md`, frozen `gpu_preregistration.md`, fail-closed `spend_gate.py` | Replace only CPU placeholders with generated artifacts; leave all GPU cells unmeasured |
+| H. Manuscript/claims | CPU results populated; final release audit active | `paper/manuscript.md`, `claims_evidence.md`, dated `literature_matrix.md`, frozen `gpu_preregistration.md`, fail-closed `spend_gate.py`, hash-linked CPU result table | Leave every GPU cell unmeasured until its registered stage; re-run literature search at submission |
 
 ## Current zero-GPU release decision
 
 Do not rent an accelerator yet. The semantics, reference state machine,
-fidelity abstractions, competing schedulers, and exact scheduling oracle pass
-their local gates, but the broad CPU evidence and clean-release gates are still
-active. GPU Stage 1 becomes admissible only after every active row above is
-closed at one tagged commit and a clean reproduction confirms its hashes.
+fidelity abstractions, competing schedulers, exact scheduling oracle, broad
+workload study, and manuscript population pass their local gates. The
+clean-release and pinned production-patch gates are still active. GPU Stage 1
+becomes admissible only after those rows close at one tagged commit and a clean
+reproduction confirms all hashes.
 
 ## Irreducible accelerator boundary
 

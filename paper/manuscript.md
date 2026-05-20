@@ -487,17 +487,77 @@ does not convert a synthetic latency surface into a performance claim.
 
 ### 8.4 Extended fidelity, oracle, and workload study
 
-Results to populate after the CPU completion runs:
+The frozen full CPU study is stored in
+`experiments/results/cpu_completion_full/`. Its canonical manifest payload
+SHA-256 is
+`6b2ed7fdf94f206fbce344820cc531ab5b887492cdbdf90da0aa90be21d53021`.
+The bundle contains 12 predeclared Plackett--Burman stress cells, 30
+independent paired seed/trace clusters per cell, 2,880 policy rows, 360
+one-round fidelity rows, 3,240 complete hash-linked traces, six exact bounded
+oracle certificates, and three deterministic adversarial witnesses. A second
+full run was byte-identical. All results in this section are simulation-model
+or exact finite-domain evidence, not accelerator measurements.
 
-| Question | Artifact/table |
-|---|---|
-| Null-equivalence of fidelity model | `[CPU-FIDELITY-NULL]` |
-| Cache fanout/budget/eviction phase | `[CPU-CACHE-PHASE]` |
-| Remote draft workers/jitter/failure | `[CPU-DRAFT-SERVICE]` |
-| Full-baseline comparison | `[CPU-BASELINES]` |
-| H2 gap to generalized oracle | `[CPU-ORACLE-GAP]` |
-| Held-out MMPP/Pareto/replay intervals | `[CPU-VALIDATION]` |
-| Adversarial starvation/break-even traces | `[CPU-ADVERSARIAL]` |
+The fidelity null configuration reduces exactly to the existing row/slot cost
+abstraction under the documented synchronized bounded-batch conditions:
+prefill and transport are zero, and target and draft batches each call the
+reference hardware-profile curve exactly once. `tests/test_fidelity.py`
+checks the equality without a fitted tolerance. Across the full stress design,
+observed cache-hit fractions span 0 to 1 and per-cluster P95 TTFT spans
+1.86748 to 28.505 ms. In the six held-out cells, cluster-mean cache-hit
+intervals range from 0.552--0.640 in the synchronized cell to the degenerate
+1.0 interval in the heterogeneous cell; P95 TTFT cluster means range from
+2.369 ms (95% interval 2.279--2.455) for MMPP to 28.505 ms for the
+synchronized cell. These cells exercise finite page-rounded LRU eviction,
+one/three outcome branches, one/two workers, jitter, bounded queues, failures,
+retry, and backpressure. Because workload family and train/validation role are
+not randomized independently of the screening rows, these ranges are stress
+evidence rather than causal main effects for cache or network parameters.
+
+Policy results are partitioned into two explicitly non-comparable harnesses.
+The multi-round decoder-policy simulator compares barrier, immediate fission,
+fixed coalescing, and H2. The pre-realized scheduler abstraction separately
+compares FIFO, SPECTRE hybrid, EXSpec sliding-pool, and myopic slack/aging
+while asserting identical semantic outputs. No cross-harness ranking is
+permitted. The scheduler abstractions are deliberately mechanism-level models;
+their differences from FIFO must not be presented as measured performance of
+the named production systems.
+
+For the predeclared 18-comparison validation family, positive effects always
+mean improvement and the intervals are simultaneous Bonferroni paired-cluster
+intervals (familywise alpha 0.05):
+
+| workload | H2 throughput effect (tokens/s) | H2 P95-latency effect (ms) |
+|---|---:|---:|
+| synchronized | -92.96 [-139.03, -43.82] | -0.97 [-2.11, 0.14] |
+| Poisson | +99.02 [31.95, 172.38] | +1.72 [1.04, 2.43] |
+| exact MMPP | -29.89 [-107.50, 56.73] | +5.35 [2.49, 8.05] |
+| finite-mean Pareto | -448.91 [-500.58, -391.34] | -6.23 [-7.84, -4.55] |
+| heterogeneous | +85.53 [23.13, 145.81] | +2.88 [1.74, 4.16] |
+| exact replay | +46.96 [28.83, 64.94] | +1.69 [1.01, 2.40] |
+
+Deadline-miss differences are zero in all six deadline-miss headline
+comparisons. These
+model outcomes reject a universal-dominance narrative: H2's sign changes by
+workload, and the MMPP throughput interval crosses zero. The complete
+sufficient statistics and resample fingerprints are in `uncertainty.json`;
+means are not used alone.
+
+For each held-out workload, an independently brute-force-verified six-job
+generalized oracle admits arbitrary ordered subsets, release-time waits,
+row/slot capacities, deadlines, and exact rational costs. H2 adds no deadline
+violations on these six instances, but its weighted-flow gap is nonzero in
+every case: 1.004--1.44 time-weight units. This is an empirical bounded
+one-shot gap, not an approximation guarantee or a multi-round optimum.
+
+Finally, the regenerated counterexamples make heuristic limits concrete:
+SPECTRE's modeled fixed threshold selects a 13.5 ms padded-parallel step over
+a 6.92 ms ordinary step and spends 63 padded slots; EXSpec-style homogeneous
+grouping delays the unique-length row by 2.4 ms versus 0.3 ms under FIFO; and
+aging promotion causes a tight-deadline miss that the slack-only ordering
+avoids. Each witness preserves the same semantic output signature. The full
+method, evidence strata, and reproduction command are documented in
+`docs/cpu_completion_study.md`.
 
 ## 9. Registered accelerator results
 
