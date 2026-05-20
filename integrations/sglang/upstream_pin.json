@@ -1,0 +1,69 @@
+{
+  "audit_date": "2026-07-23",
+  "repository": "https://github.com/sgl-project/sglang",
+  "schema": "fissionspec.sglang-upstream-pin.v1",
+  "spectre_pull_request": {
+    "base_commit": "fae90abf6e15aaffb6fd924a439253674771487d",
+    "head_commit": "1a8520879c53462b7ac1861d3aad7de4bf5860d4",
+    "number": 22272,
+    "state_at_audit": "open",
+    "url": "https://github.com/sgl-project/sglang/pull/22272"
+  },
+  "tracked_files": [
+    {
+      "path": "python/sglang/srt/speculative/spectre/verifier/spectre_target_scheduler_mixin.py",
+      "ref": "spectre_pull_request.head_commit",
+      "sha256": "ba71f333c320dd3095ec9efb3e1aff3cdcd93ab4801d394aba2c17d8407b6ec1"
+    },
+    {
+      "path": "python/sglang/srt/speculative/spectre/verifier/spectre_worker.py",
+      "ref": "spectre_pull_request.head_commit",
+      "sha256": "18df21b800d2dddffea413a0215226f2320b7dcfd3d1bda7328fcec405aa7ea4"
+    },
+    {
+      "path": "python/sglang/srt/speculative/spectre/spectre_protocol.py",
+      "ref": "spectre_pull_request.head_commit",
+      "sha256": "87978e58bdf992bc03269e703ee487dd3a6ece557bc0556c291f57b12b27898c"
+    },
+    {
+      "path": "python/sglang/srt/managers/schedule_batch.py",
+      "ref": "spectre_pull_request.head_commit",
+      "sha256": "969ba646dda5479451431108a3e977e8ebe4799693eaa33ce1e6ada1b2b744d3"
+    },
+    {
+      "path": "python/sglang/srt/managers/scheduler.py",
+      "ref": "spectre_pull_request.head_commit",
+      "sha256": "39244656955f0c887c6f413840b9430e7a18126268d5ad5fa7168e0926b8c58b"
+    },
+    {
+      "path": "python/sglang/srt/managers/scheduler_output_processor_mixin.py",
+      "ref": "spectre_pull_request.head_commit",
+      "sha256": "b32a79a38ca01d1d6adcc049905a712b09e65570ad8af94aa28720b5c4ba6b9c"
+    }
+  ],
+  "upstream_main": {
+    "commit": "d0b9689805232d8ab37789121cbc3b766b5c723e",
+    "tracked_files": [
+      {
+        "path": "python/sglang/srt/managers/schedule_batch.py",
+        "sha256": "c405264d984984645fcb733df55198b2040554c46ecb34f84aa8ff76dc39022a"
+      },
+      {
+        "path": "python/sglang/srt/managers/scheduler.py",
+        "sha256": "9d6f270c0b251bcd3102cf82d6d2bd5fe8989a21cfe425c0368357e44743effc"
+      },
+      {
+        "path": "python/sglang/srt/managers/scheduler_components/batch_result_processor.py",
+        "sha256": "006c88fc11890eb62ded439e01c1e57a3b4632b44b45d5158efb0acbd6a55308"
+      },
+      {
+        "path": "python/sglang/srt/managers/scheduler_components/output_streamer.py",
+        "sha256": "63939f485a50115eaf94c6acf995ad9b969e703d2c1c764d2af8702e4c63110b"
+      },
+      {
+        "path": "python/sglang/srt/speculative/spec_info.py",
+        "sha256": "a65b141023ed23264c8ab533039f89e551195182acd66cdbf2cfbb82c10e5f74"
+      }
+    ]
+  }
+}

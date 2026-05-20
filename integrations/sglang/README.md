@@ -6,6 +6,45 @@ SPECTRE already supplies a remote-drafter transport and chain-verification
 path. FissionSpec changes the target scheduler boundary after rejection
 sampling; it does not require a new verifier.
 
+## Pinned upstream seam
+
+The source audit is pinned in `upstream_pin.json`. At the 2026-07-23 audit,
+SGLang main was commit `d0b9689805232d8ab37789121cbc3b766b5c723e` and the
+SPECTRE implementation remained open PR
+[#22272](https://github.com/sgl-project/sglang/pull/22272), head
+`1a8520879c53462b7ac1861d3aad7de4bf5860d4`. The PR was based on
+`fae90abf6e15aaffb6fd924a439253674771487d`.
+
+This distinction is operationally important. The PR adds its own scheduler
+mixins and modifies the former `scheduler_output_processor_mixin.py`; current
+main has since moved decode-result handling into
+`scheduler_components/batch_result_processor.py` and enables speculative V2
+overlap by default. A FissionSpec patch must first rebase the SPECTRE outcome
+producer onto the pinned main architecture. Applying a patch directly to the
+old PR base would spend GPU setup time discovering source drift.
+
+The PR already exposes the critical post-verification facts:
+
+- `SpectreWorker._post_verify_update_drafts` determines per-request continuation
+  match/miss and updates `req.cur_drafts`;
+- target messages are currently keyed by `(request_id, spec_cnt)`;
+- `_decide_verify_num_draft_tokens` still chooses width at batch granularity;
+  and
+- failed rows may synchronously retry or remain in the next mixed target batch.
+
+The production patch therefore has four narrow changes after the rebase:
+
+1. extend the wire/state key to `(request_id, spec_cnt, fission_version)`;
+2. publish each `_post_verify_update_drafts` result as an independent lane
+   transition;
+3. remove misses from target `ScheduleBatch` construction while asynchronous
+   recovery owns them, then reinsert a version-validated recovered descriptor;
+4. instrument logical rows, real verifier slots, and graph-bucket slots at the
+   newly factored batch-result/scheduler boundary.
+
+File hashes in `upstream_pin.json` make this seam fail closed when either main
+or the open PR moves.
+
 ## Required scheduler state
 
 Attach the following compact record to each decode request:
