@@ -423,8 +423,15 @@ The independent unit is a seed/trace cluster. Policies are paired on the same
 workload and counter RNG. The analysis reports paired raw/relative effects,
 `d_z`, win probability, deterministic cluster-bootstrap intervals,
 family-wise multiplicity metadata, and replication planning. Optional stopping
-uses a bounded alpha-spending Hoeffding confidence sequence with bounds fixed
-before observation.
+uses nine synchronized looks fixed before observation and a Bonferroni
+allocation across all 24 endpoints and looks. The efficient primary intervals
+use a Studentized paired-block working model; every look also reports a
+distribution-free bounded Hoeffding sensitivity interval that never silently
+replaces the primary estimand. The checked-in adversarial skewed-null
+calibration exposes the assumption boundary rather than presenting the
+Studentized rule as distribution-free. Full-study percentile bootstraps use
+20,000 deterministic cluster resamples and retain their finite extreme-tail
+resolution.
 
 Means without uncertainty cannot support a headline cell. Fewer than ten
 independent clusters are automatically labeled pilot evidence.
@@ -494,13 +501,15 @@ does not convert a synthetic latency surface into a performance claim.
 The frozen full CPU study is stored in
 `experiments/results/cpu_completion_full/`. Its canonical manifest payload
 SHA-256 is
-`6b2ed7fdf94f206fbce344820cc531ab5b887492cdbdf90da0aa90be21d53021`.
+`4d933074b546bce29b253a5ed1806f8d1111f7c7b2a9a75b75b810932f2f590e`.
 The bundle contains 12 predeclared Plackett--Burman stress cells, 30
 independent paired seed/trace clusters per cell, 2,880 policy rows, 360
 one-round fidelity rows, 3,240 complete hash-linked traces, six exact bounded
 oracle certificates, and three deterministic adversarial witnesses. A second
-full run was byte-identical. All results in this section are simulation-model
-or exact finite-domain evidence, not accelerator measurements.
+full run on the same host/runtime was byte-identical. All results in this
+section are simulation-model or exact finite-domain evidence, not accelerator
+measurements; cross-platform reproduction uses the declared tolerance-based
+semantic comparator and does not claim byte identity.
 
 The fidelity null configuration reduces exactly to the existing row/slot cost
 abstraction under the documented synchronized bounded-batch conditions:
