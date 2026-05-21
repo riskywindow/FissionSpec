@@ -1,0 +1,16 @@
+{
+  "artifact_files": {
+    "controller_complexity.json": {
+      "bytes": 11412,
+      "sha256": "3634c3394dbd7af11086024422a0cc88a79edaeafb9e6da4fba29dc7ff68b4fa"
+    },
+    "controller_overhead_local.json": {
+      "bytes": 10164,
+      "sha256": "b7e46f9fc0fabea05a6bc35b0edfea4fc78f32fd0a7faae32fea2caed72171f4"
+    }
+  },
+  "complexity_document_sha256": "eb56120d8dfd705203be8e684c53a04947df025dccd1512970b0f17c1368e070",
+  "measurement_warning": "LOCAL CPU TIMING / NOT GPU EVIDENCE / NOT CROSS-HOST COMPARABLE",
+  "payload_sha256": "4d0788a1cd2be5709eccbe1098afcf9e661947c5ced8770b415d10c3f61c12c9",
+  "schema_version": 1
+}

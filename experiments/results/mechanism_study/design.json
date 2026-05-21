@@ -1,0 +1,474 @@
+{
+  "claim_boundary": "These paired effects identify interventions inside the declared CPU models only. They do not estimate CUDA-kernel, accelerator-memory, network-fabric, power, or production-serving effects.",
+  "configuration_search": false,
+  "decoder_workload": {
+    "construction": "Up to eight sparse two-request miss/hit recovery probes followed by one high-load Poisson burst.",
+    "factor_status": "The workload is identical within every paired contrast.",
+    "purpose": "Sparse probes exercise controller wait/refusion uptake; the burst exercises batch-capacity and physical-slot interventions in the same immutable workload."
+  },
+  "evidence_class": "synthetic-cpu-model",
+  "inference": {
+    "bootstrap_resamples": 20000,
+    "confirmatory_metrics": {
+      "decoder-policy": [
+        "throughput_tokens_per_s",
+        "p95_tbt_ms",
+        "target_launches_per_request"
+      ],
+      "one-round-fidelity": [
+        "cache_hit_rate",
+        "restricted_next_ready_delay_ms",
+        "next_round_unready_rate"
+      ]
+    },
+    "familywise_alpha": 0.05,
+    "readiness_restriction_ms": 25.0
+  },
+  "interventions": [
+    {
+      "changed_field": "recovery_latency_scale",
+      "changed_fields_audit": [
+        "recovery_latency_scale"
+      ],
+      "factor": "recovery-latency",
+      "intervention_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 0.5,
+        "verifier_slot_ms": 0.018
+      },
+      "intervention_value": 0.5,
+      "level": "lower",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 1.0,
+      "setting_id": "decoder/recovery-latency/lower",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "recovery_latency_scale",
+      "changed_fields_audit": [
+        "recovery_latency_scale"
+      ],
+      "factor": "recovery-latency",
+      "intervention_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 2.0,
+        "verifier_slot_ms": 0.018
+      },
+      "intervention_value": 2.0,
+      "level": "upper",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 1.0,
+      "setting_id": "decoder/recovery-latency/upper",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "verifier_slot_ms",
+      "changed_fields_audit": [
+        "verifier_slot_ms"
+      ],
+      "factor": "physical-verifier-slot-cost",
+      "intervention_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.0
+      },
+      "intervention_value": 0.0,
+      "level": "lower",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 0.018,
+      "setting_id": "decoder/physical-verifier-slot-cost/lower",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "verifier_slot_ms",
+      "changed_fields_audit": [
+        "verifier_slot_ms"
+      ],
+      "factor": "physical-verifier-slot-cost",
+      "intervention_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.06
+      },
+      "intervention_value": 0.06,
+      "level": "upper",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 0.018,
+      "setting_id": "decoder/physical-verifier-slot-cost/upper",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "batch_capacity",
+      "changed_fields_audit": [
+        "batch_capacity"
+      ],
+      "factor": "target-batch-capacity",
+      "intervention_setting": {
+        "batch_capacity": 8,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "intervention_value": 8,
+      "level": "lower",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 16,
+      "setting_id": "decoder/target-batch-capacity/lower",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "batch_capacity",
+      "changed_fields_audit": [
+        "batch_capacity"
+      ],
+      "factor": "target-batch-capacity",
+      "intervention_setting": {
+        "batch_capacity": 32,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "intervention_value": 32,
+      "level": "upper",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 16,
+      "setting_id": "decoder/target-batch-capacity/upper",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "controller_max_wait_ms",
+      "changed_fields_audit": [
+        "controller_max_wait_ms"
+      ],
+      "factor": "controller-max-wait",
+      "intervention_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 0.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "intervention_value": 0.0,
+      "level": "lower",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 2.0,
+      "setting_id": "decoder/controller-max-wait/lower",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "controller_max_wait_ms",
+      "changed_fields_audit": [
+        "controller_max_wait_ms"
+      ],
+      "factor": "controller-max-wait",
+      "intervention_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 5.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "intervention_value": 5.0,
+      "level": "upper",
+      "reference_setting": {
+        "batch_capacity": 16,
+        "controller_max_wait_ms": 2.0,
+        "recovery_latency_scale": 1.0,
+        "verifier_slot_ms": 0.018
+      },
+      "reference_value": 2.0,
+      "setting_id": "decoder/controller-max-wait/upper",
+      "stratum": "decoder-policy"
+    },
+    {
+      "changed_field": "cache_byte_budget",
+      "changed_fields_audit": [
+        "cache_byte_budget"
+      ],
+      "factor": "cache-budget",
+      "intervention_setting": {
+        "cache_byte_budget": 262144,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "intervention_value": 262144,
+      "level": "lower",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 1048576,
+      "setting_id": "fidelity/cache-budget/lower",
+      "stratum": "one-round-fidelity"
+    },
+    {
+      "changed_field": "cache_byte_budget",
+      "changed_fields_audit": [
+        "cache_byte_budget"
+      ],
+      "factor": "cache-budget",
+      "intervention_setting": {
+        "cache_byte_budget": 8388608,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "intervention_value": 8388608,
+      "level": "upper",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 1048576,
+      "setting_id": "fidelity/cache-budget/upper",
+      "stratum": "one-round-fidelity"
+    },
+    {
+      "changed_field": "fanout",
+      "changed_fields_audit": [
+        "fanout"
+      ],
+      "factor": "branch-fanout",
+      "intervention_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 1,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "intervention_value": 1,
+      "level": "lower",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 2,
+      "setting_id": "fidelity/branch-fanout/lower",
+      "stratum": "one-round-fidelity"
+    },
+    {
+      "changed_field": "fanout",
+      "changed_fields_audit": [
+        "fanout"
+      ],
+      "factor": "branch-fanout",
+      "intervention_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 3,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "intervention_value": 3,
+      "level": "upper",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 2,
+      "setting_id": "fidelity/branch-fanout/upper",
+      "stratum": "one-round-fidelity"
+    },
+    {
+      "changed_field": "network_jitter_ms",
+      "changed_fields_audit": [
+        "network_jitter_ms"
+      ],
+      "factor": "network-jitter",
+      "intervention_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.0
+      },
+      "intervention_value": 0.0,
+      "level": "lower",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 0.03,
+      "setting_id": "fidelity/network-jitter/lower",
+      "stratum": "one-round-fidelity"
+    },
+    {
+      "changed_field": "network_jitter_ms",
+      "changed_fields_audit": [
+        "network_jitter_ms"
+      ],
+      "factor": "network-jitter",
+      "intervention_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.2
+      },
+      "intervention_value": 0.2,
+      "level": "upper",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 0.03,
+      "setting_id": "fidelity/network-jitter/upper",
+      "stratum": "one-round-fidelity"
+    },
+    {
+      "changed_field": "network_failure_probability",
+      "changed_fields_audit": [
+        "network_failure_probability"
+      ],
+      "factor": "network-failure",
+      "intervention_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.0,
+        "network_jitter_ms": 0.03
+      },
+      "intervention_value": 0.0,
+      "level": "lower",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 0.02,
+      "setting_id": "fidelity/network-failure/lower",
+      "stratum": "one-round-fidelity"
+    },
+    {
+      "changed_field": "network_failure_probability",
+      "changed_fields_audit": [
+        "network_failure_probability"
+      ],
+      "factor": "network-failure",
+      "intervention_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.15,
+        "network_jitter_ms": 0.03
+      },
+      "intervention_value": 0.15,
+      "level": "upper",
+      "reference_setting": {
+        "cache_byte_budget": 1048576,
+        "fanout": 2,
+        "network_failure_probability": 0.02,
+        "network_jitter_ms": 0.03
+      },
+      "reference_value": 0.02,
+      "setting_id": "fidelity/network-failure/upper",
+      "stratum": "one-round-fidelity"
+    }
+  ],
+  "measurement_warning": "SYNTHETIC CPU MODEL / NOT A GPU MEASUREMENT",
+  "mode": "full",
+  "pairing": {
+    "cluster_unit": "seed",
+    "common_random_numbers": "Counter-addressed draws are invariant to intervention scheduling and are shared within each stratum/seed pair.",
+    "reference_reuse": "Each stratum has one shared reference row per seed; every alternate is compared only with that same-seed reference.",
+    "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29
+    ]
+  },
+  "reference_settings": {
+    "decoder-policy": {
+      "batch_capacity": 16,
+      "controller_max_wait_ms": 2.0,
+      "recovery_latency_scale": 1.0,
+      "verifier_slot_ms": 0.018
+    },
+    "one-round-fidelity": {
+      "cache_byte_budget": 1048576,
+      "fanout": 2,
+      "network_failure_probability": 0.02,
+      "network_jitter_ms": 0.03
+    }
+  },
+  "sample_sizes": {
+    "clusters": 30,
+    "decoder_requests_per_cluster": 48,
+    "fidelity_requests_per_cluster": 48
+  },
+  "schema_version": 1,
+  "selection_rule": "All predeclared contrasts are reported regardless of sign or magnitude.",
+  "study": "FissionSpec one-factor-at-a-time CPU mechanism study"
+}

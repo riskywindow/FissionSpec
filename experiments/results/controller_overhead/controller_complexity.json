@@ -1,0 +1,261 @@
+{
+  "artifact": "FissionSpec scale-aware controller source audit",
+  "claim_boundary": "Counts describe the full feasible two-plan path in the checked-in implementations. They are not elapsed time, CPU cycles, GPU overhead, or end-to-end serving overhead.",
+  "count_derivation": {
+    "python": "Exact materialization/key/accumulation counts plus an upper bound on short-circuiting feasibility checks, audited from FissionSpecPolicy.dispatch_at.",
+    "rust": "Exact BatchView visitor passes on the fully evaluated feasible path: 8 visits per current item and 7 per future item, audited from Horizon2Controller.evaluate."
+  },
+  "evidence_class": "deterministic-operation-count",
+  "implementation_files": {
+    "crates/fissionspec-core/src/bin/controller_scale_bench.rs": "b77816c6895d2dc9a75cb87c569287693b46ecc64cefd0a758c13eeec44a5dad",
+    "crates/fissionspec-core/src/controller.rs": "405f41140b7dd053bbcbff18f157f3b229f8cec69d79e8d4a859f1e49f8552ee",
+    "crates/fissionspec-core/src/latency.rs": "8bafb0234a1dc99fa0386c4bd91a42bfc0ab8f01d6cf9409a2bec2bb2796572d",
+    "experiments/run_controller_overhead.py": "196192d02b926bcaad9b256880fd2aeb7209240a922742b85aa4b6733d34cb42",
+    "src/fissionspec/policies.py": "4f3893529c10bc5bdfe8c05559f458c2131a02f371453a1025980d5849133668"
+  },
+  "measurement_warning": "DETERMINISTIC SOURCE AUDIT / NOT A TIMING MEASUREMENT",
+  "path_preconditions": {
+    "capacity_units": 512,
+    "current_and_future_rows": "ready and deadline-feasible",
+    "forecast": "inside the maximum coalescing window",
+    "fused_work": "within capacity",
+    "latency_profile_knots": 6
+  },
+  "samples": [
+    {
+      "current_rows": 1,
+      "future_rows": 1,
+      "production_python_decision": "re-fuse",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 4,
+        "forecast_rows_materialized": 2,
+        "global_sort_key_evaluations": 2,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 2
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 15,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 8,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 7,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 2,
+      "future_rows": 2,
+      "production_python_decision": "re-fuse",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 8,
+        "forecast_rows_materialized": 4,
+        "global_sort_key_evaluations": 4,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 4
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 30,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 16,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 14,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 4,
+      "future_rows": 4,
+      "production_python_decision": "re-fuse",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 16,
+        "forecast_rows_materialized": 8,
+        "global_sort_key_evaluations": 8,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 8
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 60,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 32,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 28,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 8,
+      "future_rows": 8,
+      "production_python_decision": "re-fuse",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 32,
+        "forecast_rows_materialized": 16,
+        "global_sort_key_evaluations": 16,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 16
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 120,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 64,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 56,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 16,
+      "future_rows": 16,
+      "production_python_decision": "dispatch-now",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 64,
+        "forecast_rows_materialized": 32,
+        "global_sort_key_evaluations": 32,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 32
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 240,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 128,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 112,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 32,
+      "future_rows": 32,
+      "production_python_decision": "dispatch-now",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 128,
+        "forecast_rows_materialized": 64,
+        "global_sort_key_evaluations": 64,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 64
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 480,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 256,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 224,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 64,
+      "future_rows": 64,
+      "production_python_decision": "dispatch-now",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 256,
+        "forecast_rows_materialized": 128,
+        "global_sort_key_evaluations": 128,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 128
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 960,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 512,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 448,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 96,
+      "future_rows": 96,
+      "production_python_decision": "dispatch-now",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 384,
+        "forecast_rows_materialized": 192,
+        "global_sort_key_evaluations": 192,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 192
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 1440,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 768,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 672,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    },
+    {
+      "current_rows": 128,
+      "future_rows": 128,
+      "production_python_decision": "dispatch-now",
+      "python_source_audit": {
+        "asymptotic_time": "O((n + m) log(n + m))",
+        "auxiliary_space": "O(n + m)",
+        "dominant_reason": "global rolling-EDF sorted(current + future) at the prospective wake",
+        "feasibility_row_checks_upper_bound": 512,
+        "forecast_rows_materialized": 256,
+        "global_sort_key_evaluations": 256,
+        "latency_profile_queries": 3,
+        "wait_plan_row_accumulations": 256
+      },
+      "rust_source_audit": {
+        "allocation_scope": "The caller owns input slices and the latency profile. This count does not claim that the surrounding serving loop never allocates.",
+        "asymptotic_time": "O(n + m + log k)",
+        "batch_view_item_visits": 1920,
+        "controller_auxiliary_space": "O(1)",
+        "current_item_visits": 1024,
+        "explicit_heap_allocations_in_evaluate": 0,
+        "future_item_visits": 896,
+        "latency_profile_knots": 6,
+        "latency_profile_queries": 3
+      }
+    }
+  ],
+  "schema_version": 1
+}

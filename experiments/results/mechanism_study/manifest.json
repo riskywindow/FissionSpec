@@ -1,0 +1,45 @@
+{
+  "artifact_files": {
+    "SUMMARY.md": {
+      "bytes": 4591,
+      "sha256": "a39d04c17281509fa3d07c6fdf1fdd6a2b73080b23300dfa6bcf90c31ce75bf0"
+    },
+    "design.json": {
+      "bytes": 13786,
+      "sha256": "7cdbd21286643123de3ae7cb4ac0c7e58aa7d181e0c84596c1cc0a06a2b52667"
+    },
+    "environment.json": {
+      "bytes": 848,
+      "sha256": "99032d67654f0331c5a9c72caea25937d8599a4615c423f98de3cbfac9d575b4"
+    },
+    "inference.json": {
+      "bytes": 50725,
+      "sha256": "e56ec882cccee47d98f4ce68caff3f9a612d4bc42b98322d68254730d75461df"
+    },
+    "rows.csv": {
+      "bytes": 167128,
+      "sha256": "206789cf39e51b19e4c1a264e9696fde52873c4861fec2021175846bda97fe59"
+    }
+  },
+  "claim_boundary": "These paired effects identify interventions inside the declared CPU models only. They do not estimate CUDA-kernel, accelerator-memory, network-fabric, power, or production-serving effects.",
+  "implementation_files": {
+    "experiments/run_mechanism_study.py": "5efafd02bd299dfddbd154dc48d970d3e4e9aa07b052fcc55756f14b7ee57c4b",
+    "src/fissionspec/fidelity.py": "5eaca7437aac36522e365995954e3f1e08a64bb9609352fca7b2f4cabf976abd",
+    "src/fissionspec/metrics.py": "cd50d62e8d36f65e317cbd5dc9acaa3f410d712d7470fa4ea71eaf010c6a486e",
+    "src/fissionspec/policies.py": "4f3893529c10bc5bdfe8c05559f458c2131a02f371453a1025980d5849133668",
+    "src/fissionspec/profiles.py": "7a597f0bf07a3d5a535892178332a5aaf2db643bb97d91ad49bcff3dbf0e2308",
+    "src/fissionspec/rng.py": "d5dc0d6dd0a599a62f43df49a72ffee73e5b5f20d3b09f6fc86ac47d3208fbe8",
+    "src/fissionspec/simulator.py": "7a3a8a1b38756520c4dfb2c25828fc9ad7b4cd18015b8a1f889bf0a32d787008",
+    "src/fissionspec/workload.py": "5f4aee12c5a0299aa4147aedf7e61dc0ea02a1f7988baa52ab11aec2a5b5d58d",
+    "src/fissionspec/workload_generators.py": "53482e3b66013e2b54af899b356eb670423a8bdf21c3c2ae825e3b35aedd24d7"
+  },
+  "implementation_sha256": "1ed448f66bee1b641e0e17739f6c7ee4cca5943e8934cfe7eedce9fc60c64498",
+  "measurement_warning": "SYNTHETIC CPU MODEL / NOT A GPU MEASUREMENT",
+  "mode": "full",
+  "payload_sha256": "cc7d5ae1dafde01be8cee02793a53804bb429c41f08b419e58e96747b70c4c35",
+  "rows": 540,
+  "schema_version": 1,
+  "study": "FissionSpec one-factor-at-a-time CPU mechanism study",
+  "trace_hashes": 540,
+  "trace_retention": "rows.csv retains every per-cluster sufficient statistic and the SHA-256 of its complete canonical simulator/fidelity trace payload."
+}

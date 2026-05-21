@@ -1,0 +1,365 @@
+{
+  "artifact": "FissionSpec local controller timing snapshot",
+  "claim_boundary": "Raw wall-clock samples characterize this host and build only. Python and Rust harness loops are not identical, so no cross-language ratio is reported. The samples do not predict GPU or end-to-end serving overhead.",
+  "environment": {
+    "cargo_version": "cargo 1.93.1 (083ac5135 2025-12-15)",
+    "logical_cpu_count": 12,
+    "machine": "arm64",
+    "platform": "macOS-15.6.1-arm64-arm-64bit",
+    "processor": "arm",
+    "python_implementation": "CPython",
+    "python_version": "3.12.8",
+    "rustc_version": "rustc 1.93.1 (01f6ddf75 2026-02-11)",
+    "source_hashes": {
+      "crates/fissionspec-core/src/bin/controller_scale_bench.rs": "b77816c6895d2dc9a75cb87c569287693b46ecc64cefd0a758c13eeec44a5dad",
+      "crates/fissionspec-core/src/controller.rs": "405f41140b7dd053bbcbff18f157f3b229f8cec69d79e8d4a859f1e49f8552ee",
+      "crates/fissionspec-core/src/latency.rs": "8bafb0234a1dc99fa0386c4bd91a42bfc0ab8f01d6cf9409a2bec2bb2796572d",
+      "experiments/run_controller_overhead.py": "196192d02b926bcaad9b256880fd2aeb7209240a922742b85aa4b6733d34cb42",
+      "src/fissionspec/policies.py": "4f3893529c10bc5bdfe8c05559f458c2131a02f371453a1025980d5849133668"
+    },
+    "timing_controls": {
+      "background_load_controlled": false,
+      "cpu_frequency_fixed": false,
+      "process_affinity_pinned": false,
+      "python_gc_disabled_in_timed_region": true,
+      "raw_repeats_retained": true,
+      "rust_build_profile": "release"
+    }
+  },
+  "evidence_class": "exploratory-local-cpu-timing",
+  "measurement_warning": "LOCAL CPU TIMING / NOT GPU EVIDENCE / NOT CROSS-HOST COMPARABLE",
+  "runtimes": [
+    {
+      "garbage_collector_disabled_inside_timed_region": true,
+      "repeats": 7,
+      "runtime": "python",
+      "samples": [
+        {
+          "current_rows": 1,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            340687000,
+            342038625,
+            343594041,
+            343914208,
+            342692375,
+            343349916,
+            343264875
+          ],
+          "future_rows": 1,
+          "iterations_per_repeat": 100000,
+          "maximum_ns_per_decision": 3439.14208,
+          "median_ns_per_decision": 3432.64875,
+          "minimum_ns_per_decision": 3406.87
+        },
+        {
+          "current_rows": 2,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            501508750,
+            481168084,
+            474873500,
+            497504250,
+            476269208,
+            478726125,
+            475589583
+          ],
+          "future_rows": 2,
+          "iterations_per_repeat": 100000,
+          "maximum_ns_per_decision": 5015.0875,
+          "median_ns_per_decision": 4787.26125,
+          "minimum_ns_per_decision": 4748.735
+        },
+        {
+          "current_rows": 4,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            672828791,
+            673976125,
+            709503875,
+            690036375,
+            689323709,
+            686399417,
+            672511791
+          ],
+          "future_rows": 4,
+          "iterations_per_repeat": 100000,
+          "maximum_ns_per_decision": 7095.03875,
+          "median_ns_per_decision": 6863.99417,
+          "minimum_ns_per_decision": 6725.11791
+        },
+        {
+          "current_rows": 8,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            648412250,
+            670087084,
+            650941416,
+            660936500,
+            650182625,
+            647826125,
+            649462916
+          ],
+          "future_rows": 8,
+          "iterations_per_repeat": 62500,
+          "maximum_ns_per_decision": 10721.393344,
+          "median_ns_per_decision": 10402.922,
+          "minimum_ns_per_decision": 10365.218
+        },
+        {
+          "current_rows": 16,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            574014292,
+            563300500,
+            553992875,
+            545548042,
+            573402375,
+            547116375,
+            559883791
+          ],
+          "future_rows": 16,
+          "iterations_per_repeat": 31250,
+          "maximum_ns_per_decision": 18368.457344,
+          "median_ns_per_decision": 17916.281312,
+          "minimum_ns_per_decision": 17457.537344
+        },
+        {
+          "current_rows": 32,
+          "digest": 7,
+          "elapsed_ns_repeats": [
+            503000875,
+            499956291,
+            504625042,
+            511206625,
+            501538500,
+            499057250,
+            501927500
+          ],
+          "future_rows": 32,
+          "iterations_per_repeat": 15625,
+          "maximum_ns_per_decision": 32717.224,
+          "median_ns_per_decision": 32123.36,
+          "minimum_ns_per_decision": 31939.664
+        },
+        {
+          "current_rows": 64,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            489030875,
+            468827208,
+            472673375,
+            487697083,
+            472600500,
+            476409334,
+            471268292
+          ],
+          "future_rows": 64,
+          "iterations_per_repeat": 7812,
+          "maximum_ns_per_decision": 62599.95839733743,
+          "median_ns_per_decision": 60506.06438812084,
+          "minimum_ns_per_decision": 60013.72350230415
+        },
+        {
+          "current_rows": 96,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            469473125,
+            500804500,
+            482659792,
+            465222542,
+            473011667,
+            470762334,
+            468729500
+          ],
+          "future_rows": 96,
+          "iterations_per_repeat": 5208,
+          "maximum_ns_per_decision": 96160.6182795699,
+          "median_ns_per_decision": 90392.15322580645,
+          "minimum_ns_per_decision": 89328.4450844854
+        },
+        {
+          "current_rows": 128,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            470528209,
+            459898042,
+            460434250,
+            477402208,
+            457941625,
+            455757917,
+            460201250
+          ],
+          "future_rows": 128,
+          "iterations_per_repeat": 3906,
+          "maximum_ns_per_decision": 122222.7875064004,
+          "median_ns_per_decision": 117819.06041986687,
+          "minimum_ns_per_decision": 116681.49436763953
+        }
+      ],
+      "target_row_visits_per_repeat": 1000000,
+      "timer": "time.perf_counter_ns"
+    },
+    {
+      "build_profile": "release",
+      "cargo_stderr": "",
+      "command": [
+        "cargo",
+        "run",
+        "--release",
+        "--quiet",
+        "--manifest-path",
+        "crates/fissionspec-core/Cargo.toml",
+        "--bin",
+        "controller_scale_bench",
+        "--",
+        "2000000",
+        "7"
+      ],
+      "measurement_warning": "LOCAL CPU TIMING / NOT GPU EVIDENCE / NOT CROSS-HOST COMPARABLE",
+      "repeats": 7,
+      "runtime": "rust",
+      "samples": [
+        {
+          "current_rows": 1,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            24029208,
+            23968583,
+            23782500,
+            23716500,
+            24128917,
+            23836250,
+            23847417
+          ],
+          "future_rows": 1,
+          "iterations_per_repeat": 1000000
+        },
+        {
+          "current_rows": 2,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            19946125,
+            20256291,
+            19930500,
+            19514750,
+            19926209,
+            19888625,
+            20738542
+          ],
+          "future_rows": 2,
+          "iterations_per_repeat": 500000
+        },
+        {
+          "current_rows": 4,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            13943416,
+            13445125,
+            12983792,
+            13381417,
+            13160708,
+            13278709,
+            13907417
+          ],
+          "future_rows": 4,
+          "iterations_per_repeat": 250000
+        },
+        {
+          "current_rows": 8,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            11527583,
+            11547625,
+            10528000,
+            10492416,
+            10581583,
+            10522458,
+            11122958
+          ],
+          "future_rows": 8,
+          "iterations_per_repeat": 125000
+        },
+        {
+          "current_rows": 16,
+          "digest": 0,
+          "elapsed_ns_repeats": [
+            7600166,
+            7619750,
+            7541000,
+            7600042,
+            7718875,
+            7843125,
+            7735875
+          ],
+          "future_rows": 16,
+          "iterations_per_repeat": 62500
+        },
+        {
+          "current_rows": 32,
+          "digest": 1,
+          "elapsed_ns_repeats": [
+            7097750,
+            7204584,
+            7087125,
+            7097792,
+            7228375,
+            7346625,
+            7138625
+          ],
+          "future_rows": 32,
+          "iterations_per_repeat": 31250
+        },
+        {
+          "current_rows": 64,
+          "digest": 1,
+          "elapsed_ns_repeats": [
+            6980333,
+            7107625,
+            6855875,
+            6892416,
+            6913292,
+            6772458,
+            6769625
+          ],
+          "future_rows": 64,
+          "iterations_per_repeat": 15625
+        },
+        {
+          "current_rows": 96,
+          "digest": 1,
+          "elapsed_ns_repeats": [
+            7123208,
+            7053458,
+            7059167,
+            7107083,
+            7007958,
+            7002708,
+            7099583
+          ],
+          "future_rows": 96,
+          "iterations_per_repeat": 10416
+        },
+        {
+          "current_rows": 128,
+          "digest": 1,
+          "elapsed_ns_repeats": [
+            7737708,
+            7505125,
+            7564417,
+            7679292,
+            7787000,
+            7622542,
+            7758958
+          ],
+          "future_rows": 128,
+          "iterations_per_repeat": 7812
+        }
+      ],
+      "schema_version": 1,
+      "target_item_visits_per_repeat": 2000000,
+      "timer": "std::time::Instant"
+    }
+  ],
+  "schema_version": 1
+}
