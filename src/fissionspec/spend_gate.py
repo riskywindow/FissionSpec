@@ -132,6 +132,19 @@ class CampaignPlan:
     def campaign_id(self) -> str:
         return hashlib.sha256(_canonical_bytes(asdict(self))).hexdigest()
 
+    def document(self) -> dict[str, object]:
+        """Return a canonical self-hashed standalone campaign plan."""
+
+        payload: dict[str, object] = {
+            "schema": "fissionspec.accelerator-campaign-plan.v1",
+            "plan": asdict(self),
+            "campaign_id": self.campaign_id,
+        }
+        return {
+            **payload,
+            "payload_sha256": hashlib.sha256(_canonical_bytes(payload)).hexdigest(),
+        }
+
     @classmethod
     def from_mapping(cls, value: object) -> CampaignPlan:
         """Decode a closed JSON-compatible plan mapping."""
@@ -179,6 +192,30 @@ class CampaignPlan:
             )
         except (TypeError, ValueError) as error:
             raise ValueError("plan is invalid") from error
+
+    @classmethod
+    def from_document(cls, value: object) -> CampaignPlan:
+        """Verify and decode a standalone self-hashed campaign plan."""
+
+        document = _closed_mapping(
+            value,
+            field="campaign plan document",
+            keys={"schema", "plan", "campaign_id", "payload_sha256"},
+        )
+        supplied_hash = _digest(
+            document["payload_sha256"],
+            field="payload_sha256",
+        )
+        payload = dict(document)
+        payload.pop("payload_sha256")
+        if hashlib.sha256(_canonical_bytes(payload)).hexdigest() != supplied_hash:
+            raise ValueError("campaign plan payload hash mismatch")
+        if document["schema"] != "fissionspec.accelerator-campaign-plan.v1":
+            raise ValueError("unsupported campaign plan schema")
+        plan = cls.from_mapping(document["plan"])
+        if _canonical_bytes(plan.document()) != _canonical_bytes(document):
+            raise ValueError("campaign plan ID or canonical state is inconsistent")
+        return plan
 
 
 @dataclass(frozen=True, slots=True)

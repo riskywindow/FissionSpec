@@ -40,9 +40,10 @@ cost remains a reporting field outside this module because provider prices,
 discounts, and reservation terms are time-varying; the resource cap is
 provider independent.
 
-`CampaignLedger.from_document` is the inverse fail-closed boundary. It verifies
-the payload hash, exact nested schemas, enum values, replay/resource caps,
-contiguous stage history, and every derived field before returning executable
+`CampaignPlan.document` and `CampaignLedger.document` produce separate
+self-hashed archive objects. Their `from_document` inverses verify payload
+hashes, exact nested schemas, enum values, replay/resource caps, contiguous
+stage history, and every derived field before returning executable
 authorization state. Rehashing a contradictory `next_stage`, spend total, or
 campaign ID is rejected rather than trusted.
 

@@ -58,6 +58,24 @@ class CampaignPlanTests(unittest.TestCase):
         self.assertEqual(len(first.campaign_id), 64)
         changed = replace(first, planned_primary_replays=1199)
         self.assertNotEqual(first.campaign_id, changed.campaign_id)
+        document = json.loads(json.dumps(first.document()))
+        self.assertEqual(CampaignPlan.from_document(document), first)
+
+    def test_plan_document_rejects_rehashed_campaign_id(self) -> None:
+        document = json.loads(json.dumps(_plan().document()))
+        document["campaign_id"] = "f" * 64
+        payload = {key: value for key, value in document.items() if key != "payload_sha256"}
+        document["payload_sha256"] = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        with self.assertRaisesRegex(ValueError, "campaign plan ID"):
+            CampaignPlan.from_document(document)
 
     def test_bad_hash_anchor_order_and_replay_caps_fail_closed(self) -> None:
         base = {
