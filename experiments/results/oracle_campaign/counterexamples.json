@@ -1,0 +1,707 @@
+[
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "a",
+          "b"
+        ],
+        "rows": 2,
+        "slots": 3,
+        "start_time": "0/1"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "6/1"
+    },
+    "certificate_hash": "e955c18d4c168c3f1609e8bc3e07514a239f7dcaa4e624552a6268d0442dd8a9",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 0,
+    "oracle_events": [
+      {
+        "end_time": "7/8",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "15/8",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "7/8"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "9/2"
+    },
+    "policy": "work-conserving-edf",
+    "problem_hash": "5ed27345e3f405b0ad9d2005f906449446a4b7e942ca831e29527037bc20cba1",
+    "scenario_id": "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "selection": "minimal-canonical",
+    "weighted_flow_gap": "3/2"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "b",
+          "c"
+        ],
+        "rows": 2,
+        "slots": 5,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "47/20",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "3/2"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 1,
+      "weighted_flow": "201/20"
+    },
+    "certificate_hash": "beb1f5f29abe5aaa245d9b1786ad3838ff261a897ab6303794aa88ec45fc469d",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 1,
+    "oracle_events": [
+      {
+        "end_time": "21/20",
+        "job_ids": [
+          "c"
+        ],
+        "rows": 1,
+        "slots": 3,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "19/10",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "21/20"
+      },
+      {
+        "end_time": "57/20",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "19/10"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "183/20"
+    },
+    "policy": "work-conserving-edf",
+    "problem_hash": "0276f0c4a0aab8fe55738bb6990a2eee066742d54138c679f19e3ad15afed8b8",
+    "scenario_id": "main/synchronized/head-miss/eta-1of4/jitter-1of4/packed-slots/wide",
+    "selection": "worst-lexicographic",
+    "weighted_flow_gap": "9/10"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "a",
+          "b"
+        ],
+        "rows": 2,
+        "slots": 3,
+        "start_time": "0/1"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "6/1"
+    },
+    "certificate_hash": "e955c18d4c168c3f1609e8bc3e07514a239f7dcaa4e624552a6268d0442dd8a9",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 0,
+    "oracle_events": [
+      {
+        "end_time": "7/8",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "15/8",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "7/8"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "9/2"
+    },
+    "policy": "saguaro-barrier",
+    "problem_hash": "5ed27345e3f405b0ad9d2005f906449446a4b7e942ca831e29527037bc20cba1",
+    "scenario_id": "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "selection": "minimal-canonical",
+    "weighted_flow_gap": "3/2"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "b",
+          "c"
+        ],
+        "rows": 2,
+        "slots": 5,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "47/20",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "3/2"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 1,
+      "weighted_flow": "201/20"
+    },
+    "certificate_hash": "beb1f5f29abe5aaa245d9b1786ad3838ff261a897ab6303794aa88ec45fc469d",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 1,
+    "oracle_events": [
+      {
+        "end_time": "21/20",
+        "job_ids": [
+          "c"
+        ],
+        "rows": 1,
+        "slots": 3,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "19/10",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "21/20"
+      },
+      {
+        "end_time": "57/20",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "19/10"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "183/20"
+    },
+    "policy": "saguaro-barrier",
+    "problem_hash": "0276f0c4a0aab8fe55738bb6990a2eee066742d54138c679f19e3ad15afed8b8",
+    "scenario_id": "main/synchronized/head-miss/eta-1of4/jitter-1of4/packed-slots/wide",
+    "selection": "worst-lexicographic",
+    "weighted_flow_gap": "9/10"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "a",
+          "b"
+        ],
+        "rows": 2,
+        "slots": 3,
+        "start_time": "0/1"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "6/1"
+    },
+    "certificate_hash": "e955c18d4c168c3f1609e8bc3e07514a239f7dcaa4e624552a6268d0442dd8a9",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 0,
+    "oracle_events": [
+      {
+        "end_time": "7/8",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "15/8",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "7/8"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "9/2"
+    },
+    "policy": "spectre-parallel-padded",
+    "problem_hash": "5ed27345e3f405b0ad9d2005f906449446a4b7e942ca831e29527037bc20cba1",
+    "scenario_id": "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "selection": "minimal-canonical",
+    "weighted_flow_gap": "3/2"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "b",
+          "c"
+        ],
+        "rows": 2,
+        "slots": 5,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "47/20",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "3/2"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 1,
+      "weighted_flow": "201/20"
+    },
+    "certificate_hash": "beb1f5f29abe5aaa245d9b1786ad3838ff261a897ab6303794aa88ec45fc469d",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 1,
+    "oracle_events": [
+      {
+        "end_time": "21/20",
+        "job_ids": [
+          "c"
+        ],
+        "rows": 1,
+        "slots": 3,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "19/10",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "21/20"
+      },
+      {
+        "end_time": "57/20",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "19/10"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "183/20"
+    },
+    "policy": "spectre-parallel-padded",
+    "problem_hash": "0276f0c4a0aab8fe55738bb6990a2eee066742d54138c679f19e3ad15afed8b8",
+    "scenario_id": "main/synchronized/head-miss/eta-1of4/jitter-1of4/packed-slots/wide",
+    "selection": "worst-lexicographic",
+    "weighted_flow_gap": "9/10"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "a",
+          "b"
+        ],
+        "rows": 2,
+        "slots": 3,
+        "start_time": "0/1"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "6/1"
+    },
+    "certificate_hash": "e955c18d4c168c3f1609e8bc3e07514a239f7dcaa4e624552a6268d0442dd8a9",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 0,
+    "oracle_events": [
+      {
+        "end_time": "7/8",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "15/8",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "7/8"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "9/2"
+    },
+    "policy": "immediate-fission",
+    "problem_hash": "5ed27345e3f405b0ad9d2005f906449446a4b7e942ca831e29527037bc20cba1",
+    "scenario_id": "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "selection": "minimal-canonical",
+    "weighted_flow_gap": "3/2"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "b",
+          "c"
+        ],
+        "rows": 2,
+        "slots": 5,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "47/20",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "3/2"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 1,
+      "weighted_flow": "201/20"
+    },
+    "certificate_hash": "beb1f5f29abe5aaa245d9b1786ad3838ff261a897ab6303794aa88ec45fc469d",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 1,
+    "oracle_events": [
+      {
+        "end_time": "21/20",
+        "job_ids": [
+          "c"
+        ],
+        "rows": 1,
+        "slots": 3,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "19/10",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "21/20"
+      },
+      {
+        "end_time": "57/20",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "19/10"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "183/20"
+    },
+    "policy": "immediate-fission",
+    "problem_hash": "0276f0c4a0aab8fe55738bb6990a2eee066742d54138c679f19e3ad15afed8b8",
+    "scenario_id": "main/synchronized/head-miss/eta-1of4/jitter-1of4/packed-slots/wide",
+    "selection": "worst-lexicographic",
+    "weighted_flow_gap": "9/10"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "1/1",
+        "kind": "grid",
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "5/2",
+        "job_ids": [
+          "a",
+          "b"
+        ],
+        "rows": 2,
+        "slots": 3,
+        "start_time": "1/1"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 1,
+      "weighted_flow": "39/4"
+    },
+    "certificate_hash": "8815f6641a194930a52d604724f307875c85c7ac8ced74fa23240fe55e3d9ec5",
+    "controller_setting": "wait-1of1/guard-0of1",
+    "deadline_violation_gap": 1,
+    "oracle_events": [
+      {
+        "end_time": "7/8",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "15/8",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "7/8"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "17/4"
+    },
+    "policy": "fixed-coalesce",
+    "problem_hash": "3d0650116659cf76cf525946545a69698f0fa32c6724a1e37bd853cefb271abe",
+    "scenario_id": "cancellation/recovery-wave/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "selection": "minimal-canonical",
+    "weighted_flow_gap": "11/2"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "1/1",
+        "kind": "release",
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "12/5",
+        "job_ids": [
+          "a",
+          "c"
+        ],
+        "rows": 2,
+        "slots": 4,
+        "start_time": "1/1"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 1,
+      "weighted_flow": "10/1"
+    },
+    "certificate_hash": "0d84dd62fd36257bd50045c92dbefc158ca86b3cab00df0318fd0b66e72a520e",
+    "controller_setting": "wait-1of1/guard-0of1",
+    "deadline_violation_gap": 1,
+    "oracle_events": [
+      {
+        "end_time": "17/20",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "1/1",
+        "kind": "forced-release",
+        "start_time": "17/20"
+      },
+      {
+        "end_time": "41/20",
+        "job_ids": [
+          "c"
+        ],
+        "rows": 1,
+        "slots": 3,
+        "start_time": "1/1"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "93/20"
+    },
+    "policy": "fixed-coalesce",
+    "problem_hash": "ac4666a92ff63998dfb194d376aa9046e5defc954215082c1af19a7623699936",
+    "scenario_id": "terminal-failure/staggered/terminal-failure-middle/eta-0of1/jitter-0of1/packed-slots/wide",
+    "selection": "worst-lexicographic",
+    "weighted_flow_gap": "107/20"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "a",
+          "b"
+        ],
+        "rows": 2,
+        "slots": 3,
+        "start_time": "0/1"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "6/1"
+    },
+    "certificate_hash": "e955c18d4c168c3f1609e8bc3e07514a239f7dcaa4e624552a6268d0442dd8a9",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 0,
+    "oracle_events": [
+      {
+        "end_time": "7/8",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "15/8",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "7/8"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "9/2"
+    },
+    "policy": "fissionspec-horizon-2",
+    "problem_hash": "5ed27345e3f405b0ad9d2005f906449446a4b7e942ca831e29527037bc20cba1",
+    "scenario_id": "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "selection": "minimal-canonical",
+    "weighted_flow_gap": "3/2"
+  },
+  {
+    "candidate_events": [
+      {
+        "end_time": "3/2",
+        "job_ids": [
+          "b",
+          "c"
+        ],
+        "rows": 2,
+        "slots": 5,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "47/20",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "3/2"
+      }
+    ],
+    "candidate_objective": {
+      "deadline_violations": 1,
+      "weighted_flow": "201/20"
+    },
+    "certificate_hash": "beb1f5f29abe5aaa245d9b1786ad3838ff261a897ab6303794aa88ec45fc469d",
+    "controller_setting": "wait-0of1/guard-0of1",
+    "deadline_violation_gap": 1,
+    "oracle_events": [
+      {
+        "end_time": "21/20",
+        "job_ids": [
+          "c"
+        ],
+        "rows": 1,
+        "slots": 3,
+        "start_time": "0/1"
+      },
+      {
+        "end_time": "19/10",
+        "job_ids": [
+          "a"
+        ],
+        "rows": 1,
+        "slots": 1,
+        "start_time": "21/20"
+      },
+      {
+        "end_time": "57/20",
+        "job_ids": [
+          "b"
+        ],
+        "rows": 1,
+        "slots": 2,
+        "start_time": "19/10"
+      }
+    ],
+    "oracle_objective": {
+      "deadline_violations": 0,
+      "weighted_flow": "183/20"
+    },
+    "policy": "fissionspec-horizon-2",
+    "problem_hash": "0276f0c4a0aab8fe55738bb6990a2eee066742d54138c679f19e3ad15afed8b8",
+    "scenario_id": "main/synchronized/head-miss/eta-1of4/jitter-1of4/packed-slots/wide",
+    "selection": "worst-lexicographic",
+    "weighted_flow_gap": "9/10"
+  }
+]

@@ -1,0 +1,115 @@
+{
+  "arrival_patterns": [
+    "synchronized",
+    "staggered",
+    "recovery-wave"
+  ],
+  "capacity_modes": [
+    "tight",
+    "wide"
+  ],
+  "controller_settings_per_problem": 6,
+  "deadline_guards": [
+    "0/1",
+    "1/4"
+  ],
+  "exact_dynamic_programming_problems": 216,
+  "expansion_over_existing_completion_study": {
+    "campaign_exact_problems": 216,
+    "existing_exact_certificates": 6,
+    "factor": 36.0,
+    "nonduplication": "This campaign uses at most three jobs and a full factorial over pre-realized mechanisms; the prior study used six six-job validation cells."
+  },
+  "independent_proof_scenarios": [
+    "cancellation/recovery-wave/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "cancellation/recovery-wave/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/wide",
+    "cancellation/recovery-wave/canceled-tail/eta-0of1/jitter-0of1/packed-slots/tight",
+    "cancellation/recovery-wave/canceled-tail/eta-0of1/jitter-0of1/packed-slots/wide",
+    "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/graph-bucket-slots/wide",
+    "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/packed-slots/tight",
+    "cancellation/synchronized/canceled-tail/eta-0of1/jitter-0of1/packed-slots/wide",
+    "main/recovery-wave/double-miss/eta-1of1/jitter-0of1/graph-bucket-slots/tight",
+    "main/recovery-wave/double-miss/eta-1of1/jitter-0of1/graph-bucket-slots/wide",
+    "main/recovery-wave/head-miss/eta-1of1/jitter-0of1/graph-bucket-slots/tight",
+    "main/recovery-wave/head-miss/eta-1of1/jitter-0of1/graph-bucket-slots/wide",
+    "main/recovery-wave/tail-miss/eta-1of1/jitter-0of1/graph-bucket-slots/tight",
+    "main/recovery-wave/tail-miss/eta-1of1/jitter-0of1/graph-bucket-slots/wide",
+    "retry/recovery-wave/retry-once/eta-1of1/jitter-0of1/graph-bucket-slots/tight",
+    "retry/recovery-wave/retry-once/eta-1of1/jitter-0of1/graph-bucket-slots/wide",
+    "terminal-failure/recovery-wave/terminal-failure-middle/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "terminal-failure/recovery-wave/terminal-failure-middle/eta-0of1/jitter-0of1/graph-bucket-slots/wide",
+    "terminal-failure/recovery-wave/terminal-failure-middle/eta-0of1/jitter-0of1/packed-slots/tight",
+    "terminal-failure/recovery-wave/terminal-failure-middle/eta-0of1/jitter-0of1/packed-slots/wide",
+    "terminal-failure/synchronized/terminal-failure-middle/eta-0of1/jitter-0of1/graph-bucket-slots/tight",
+    "terminal-failure/synchronized/terminal-failure-middle/eta-0of1/jitter-0of1/graph-bucket-slots/wide",
+    "terminal-failure/synchronized/terminal-failure-middle/eta-0of1/jitter-0of1/packed-slots/tight",
+    "terminal-failure/synchronized/terminal-failure-middle/eta-0of1/jitter-0of1/packed-slots/wide"
+  ],
+  "independent_unmemoized_optimality_proofs": 24,
+  "independent_verifier_nodes": 7636814,
+  "job_counts": {
+    "2": 24,
+    "3": 192
+  },
+  "max_waits": [
+    "0/1",
+    "1/2",
+    "1/1"
+  ],
+  "metamorphic_and_adversarial_validations": {
+    "cancellation_compilations": 12,
+    "capacity_monotonicity_pairs": 108,
+    "dispatch_component_alias_groups": 1296,
+    "input_order_and_latency_map_order_invariance_cases": 24,
+    "retry_compilations": 48,
+    "terminal_failure_compilations": 12,
+    "uniform_time_shift_invariance_cases": 12
+  },
+  "mode": "full",
+  "outcome_patterns": {
+    "canceled-tail": 12,
+    "double-miss": 48,
+    "head-miss": 48,
+    "retry-once": 48,
+    "tail-miss": 48,
+    "terminal-failure-middle": 12
+  },
+  "physical_modes": [
+    "packed-slots",
+    "graph-bucket-slots"
+  ],
+  "policies": [
+    "work-conserving-edf",
+    "saguaro-barrier",
+    "spectre-parallel-padded",
+    "immediate-fission",
+    "fixed-coalesce",
+    "fissionspec-horizon-2"
+  ],
+  "policy_comparisons": 7776,
+  "recovery_etas": [
+    "1/4",
+    "1/1"
+  ],
+  "recovery_jitters": [
+    "0/1",
+    "1/4"
+  ],
+  "scenario_families": {
+    "cancellation": 12,
+    "main": 144,
+    "retry": 48,
+    "terminal-failure": 12
+  },
+  "schema_version": 1,
+  "search_accounting": {
+    "states_explored_max": 424,
+    "states_explored_min": 54,
+    "states_explored_total": 45069,
+    "transitions_explored_max": 3035,
+    "transitions_explored_min": 148,
+    "transitions_explored_total": 207442
+  },
+  "unique_problem_hashes": 216
+}

@@ -1,0 +1,72 @@
+{
+  "claim_boundary": "Exactness holds only for the declared one-shot, non-preemptive, at-most-three-job finite action space. It does not establish a multi-round serving optimum or accelerator performance.",
+  "comparison_scope": {
+    "fissionspec-horizon-2": "complete built-in dispatch_at timing policy under fixed EDF/slot admission",
+    "fixed-coalesce": "complete built-in dispatch_at timing policy under fixed EDF/slot admission",
+    "immediate-fission": "complete built-in dispatch_at timing policy under fixed EDF/slot admission",
+    "saguaro-barrier": "dispatch-timing component only; barrier recovery and padded target execution are pre-realized outside this one-shot oracle",
+    "spectre-parallel-padded": "dispatch-timing component only; barrier recovery and padded target execution are pre-realized outside this one-shot oracle",
+    "work-conserving-edf": "independent fixed-admission no-wait baseline"
+  },
+  "controller_factors": {
+    "deadline_guard": [
+      "0/1",
+      "1/4"
+    ],
+    "guard_semantics": "controller admission subtracts the guard; the exact objective retains the original completion deadline",
+    "max_wait": [
+      "0/1",
+      "1/2",
+      "1/1"
+    ]
+  },
+  "finite_horizon": {
+    "dispatch_actions": "every ordered nonempty released subset satisfying row and slot capacity",
+    "jobs": "two or three active jobs",
+    "objective": "lexicographically minimize deadline violations, then exact weighted flow, then canonical event trace",
+    "service": "one non-preemptive target launch per active job",
+    "wait_actions": "all releases, exact deadline-safe times, controller guard-safe times, and release-plus-max-wait grid points"
+  },
+  "independent_verification_design": {
+    "count": 24,
+    "method": "independent recursive enumeration without memoization or permutation-dominance pruning, capped at 5,000,000 visited verifier nodes per proof",
+    "selection": "For the full campaign: all 16 outcome-by-physical-by-capacity-by-two-arrival cells for the two-job cancellation/failure problems, plus all eight outcome-by-capacity cells for three-job cache/retry problems under graph-bucket physical widths. This preserves every outcome and both physical/capacity modes while avoiding the known exponential packed-width three-job enumeration."
+  },
+  "measurement_warning": "EXACT BOUNDED CPU MODEL / NOT A GPU MEASUREMENT",
+  "mode": "full",
+  "pre_realized_mechanisms": {
+    "cache_outcomes": [
+      "head miss",
+      "tail miss",
+      "double miss"
+    ],
+    "cancellation": "canceled target row is absent before scheduling starts",
+    "physical_cost": "packed aggregate slots or next-power-of-two aggregate graph bucket",
+    "recovery": "exact ETA plus deterministic jitter",
+    "retry": "one failed remote attempt compiled as 2*ETA+jitter readiness",
+    "terminal_failure": "terminally failed remote row never becomes target-eligible and is absent"
+  },
+  "schema_version": 1,
+  "selection": "Every predeclared scenario and every policy result is retained.",
+  "study": "Expanded FissionSpec exact scheduler-oracle campaign",
+  "tractability_boundary": {
+    "excluded": [
+      "multi-round token generation",
+      "target preemption",
+      "live stochastic failures or cancellations after scheduling begins",
+      "KV page allocation and cache eviction",
+      "remote draft queue scheduling",
+      "Saguaro barrier execution cost",
+      "SPECTRE padded-recovery execution cost",
+      "Rust controller timing or GPU kernels"
+    ],
+    "hard_limits": {
+      "max_jobs": 3,
+      "max_states": 200000,
+      "max_trace_events": 128,
+      "max_transitions": 2000000
+    },
+    "state": "(exact current time, unfinished-job bitmask)",
+    "worst_case": "exponential in jobs and optional wait points; permutation actions are enumerated before safe dominance reduction"
+  }
+}

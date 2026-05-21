@@ -1,0 +1,50 @@
+{
+  "artifact_files": {
+    "SUMMARY.md": {
+      "bytes": 1029,
+      "sha256": "8a8a894e0511546e1af351420420bfceaf3cc7b1138d85ae7981ac7d301033a9"
+    },
+    "certificates.jsonl": {
+      "bytes": 511032,
+      "sha256": "a091049bd8b6c5da9881984529f877d0a2dbd8bb3192841c8be11da5ce88e8e0"
+    },
+    "comparisons.csv": {
+      "bytes": 4347920,
+      "sha256": "39ed2f02a06eeaf708cef930126c9a944893b6f552e00e773bffe1ff4fa2b8d7"
+    },
+    "counterexamples.json": {
+      "bytes": 16591,
+      "sha256": "c887fceec0d6fac3faac5328ca4bc4dd8e0871a30b1f07f382ec1cb5268f987c"
+    },
+    "coverage.json": {
+      "bytes": 4367,
+      "sha256": "8ad6f0df851d416b9d6f459ad7a1273c2c7a381ed7a09519b3c69eff63e01100"
+    },
+    "design.json": {
+      "bytes": 3849,
+      "sha256": "aaf835f4cb066e323823ca4e9e40a680477c8b1cc3a555b7f092767093da0b83"
+    },
+    "environment.json": {
+      "bytes": 617,
+      "sha256": "f02b1f76a3358fd8faf86573d7de1abd7e1dbec54df135c82d62b297a04c1b51"
+    },
+    "summary.json": {
+      "bytes": 3291,
+      "sha256": "9487666fd0e6ae5c49de4f00646722c470d56268af0cc6157e7eb919f13a9d2c"
+    }
+  },
+  "claim_boundary": "Exactness holds only for the declared one-shot, non-preemptive, at-most-three-job finite action space. It does not establish a multi-round serving optimum or accelerator performance.",
+  "exact_problems": 216,
+  "measurement_warning": "EXACT BOUNDED CPU MODEL / NOT A GPU MEASUREMENT",
+  "mode": "full",
+  "policy_comparisons": 7776,
+  "schema_version": 1,
+  "source_hashes": {
+    "experiments/run_oracle_campaign.py": "aec4b0ce94f56a99d1e41042e33e1bcc8ec734097e8335340335fb9327ad9610",
+    "src/fissionspec/general_oracle.py": "b8bc91b75086596ba4f6ca79adf9ea7ccda3dc8387a3c1eee5e189f6447ba798",
+    "src/fissionspec/policies.py": "4f3893529c10bc5bdfe8c05559f458c2131a02f371453a1025980d5849133668",
+    "src/fissionspec/profiles.py": "7a597f0bf07a3d5a535892178332a5aaf2db643bb97d91ad49bcff3dbf0e2308"
+  },
+  "source_tree_sha256": "3346e39018695d0fafc75f262b9b85c080b814644c0fa0ceece03d4346fc5f8f",
+  "study": "Expanded FissionSpec exact scheduler-oracle campaign"
+}

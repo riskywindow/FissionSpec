@@ -1,0 +1,98 @@
+{
+  "claim_boundary": "Exactness holds only for the declared one-shot, non-preemptive, at-most-three-job finite action space. It does not establish a multi-round serving optimum or accelerator performance.",
+  "counterexamples_retained": 12,
+  "measurement_warning": "EXACT BOUNDED CPU MODEL / NOT A GPU MEASUREMENT",
+  "policy_regret_distributions": [
+    {
+      "cases": 1296,
+      "comparison_scope": "independent fixed-admission no-wait baseline",
+      "counterexample_cases": 648,
+      "deadline_regret_cases": 264,
+      "lexicographically_optimal_cases": 648,
+      "maximum_deadline_violation_gap": 1,
+      "policy": "work-conserving-edf",
+      "same-deadline-flow-regret": {
+        "cases": 1032,
+        "maximum": "3/2",
+        "p50": "0/1",
+        "p95": "5/4"
+      }
+    },
+    {
+      "cases": 1296,
+      "comparison_scope": "dispatch-timing component only; barrier recovery and padded target execution are pre-realized outside this one-shot oracle",
+      "counterexample_cases": 648,
+      "deadline_regret_cases": 264,
+      "lexicographically_optimal_cases": 648,
+      "maximum_deadline_violation_gap": 1,
+      "policy": "saguaro-barrier",
+      "same-deadline-flow-regret": {
+        "cases": 1032,
+        "maximum": "3/2",
+        "p50": "0/1",
+        "p95": "5/4"
+      }
+    },
+    {
+      "cases": 1296,
+      "comparison_scope": "dispatch-timing component only; barrier recovery and padded target execution are pre-realized outside this one-shot oracle",
+      "counterexample_cases": 648,
+      "deadline_regret_cases": 264,
+      "lexicographically_optimal_cases": 648,
+      "maximum_deadline_violation_gap": 1,
+      "policy": "spectre-parallel-padded",
+      "same-deadline-flow-regret": {
+        "cases": 1032,
+        "maximum": "3/2",
+        "p50": "0/1",
+        "p95": "5/4"
+      }
+    },
+    {
+      "cases": 1296,
+      "comparison_scope": "complete built-in dispatch_at timing policy under fixed EDF/slot admission",
+      "counterexample_cases": 648,
+      "deadline_regret_cases": 264,
+      "lexicographically_optimal_cases": 648,
+      "maximum_deadline_violation_gap": 1,
+      "policy": "immediate-fission",
+      "same-deadline-flow-regret": {
+        "cases": 1032,
+        "maximum": "3/2",
+        "p50": "0/1",
+        "p95": "5/4"
+      }
+    },
+    {
+      "cases": 1296,
+      "comparison_scope": "complete built-in dispatch_at timing policy under fixed EDF/slot admission",
+      "counterexample_cases": 1074,
+      "deadline_regret_cases": 550,
+      "lexicographically_optimal_cases": 222,
+      "maximum_deadline_violation_gap": 1,
+      "policy": "fixed-coalesce",
+      "same-deadline-flow-regret": {
+        "cases": 746,
+        "maximum": "119/20",
+        "p50": "9/8",
+        "p95": "9/2"
+      }
+    },
+    {
+      "cases": 1296,
+      "comparison_scope": "complete built-in dispatch_at timing policy under fixed EDF/slot admission",
+      "counterexample_cases": 648,
+      "deadline_regret_cases": 260,
+      "lexicographically_optimal_cases": 648,
+      "maximum_deadline_violation_gap": 1,
+      "policy": "fissionspec-horizon-2",
+      "same-deadline-flow-regret": {
+        "cases": 1036,
+        "maximum": "39/20",
+        "p50": "0/1",
+        "p95": "3/2"
+      }
+    }
+  ],
+  "schema_version": 1
+}

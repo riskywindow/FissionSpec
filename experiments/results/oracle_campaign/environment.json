@@ -1,0 +1,24 @@
+{
+  "measurement_warning": "EXACT BOUNDED CPU MODEL / NOT A GPU MEASUREMENT",
+  "observed_runtime": {
+    "logical_cpu_count": 12,
+    "machine": "arm64",
+    "platform": "macOS-15.6.1-arm64-arm-64bit",
+    "processor": "arm",
+    "python_implementation": "CPython",
+    "python_version": "3.12.8"
+  },
+  "reproduction_contract": {
+    "archival_python_version": "3.12.8",
+    "command_template": [
+      "python",
+      "experiments/run_oracle_campaign.py",
+      "--mode",
+      "full",
+      "--output-dir",
+      "<OUTPUT_DIR>"
+    ],
+    "dependency_lock": "requirements/repro.lock"
+  },
+  "schema_version": 1
+}
