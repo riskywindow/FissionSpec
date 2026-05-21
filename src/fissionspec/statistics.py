@@ -12,6 +12,7 @@ import hashlib
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from typing import Literal, cast
 
 from .rng import CounterRNG, Seed
@@ -161,6 +162,7 @@ class BootstrapInterval:
 def _uniform_index(
     rng: CounterRNG,
     *,
+    stream: str,
     resample: int,
     draw: int,
     upper: int,
@@ -172,7 +174,7 @@ def _uniform_index(
     retry = 0
     while True:
         value = rng.uint64(
-            "paired-cluster-bootstrap",
+            stream,
             resample,
             f"cluster-index/{draw}",
             retry,
@@ -182,33 +184,29 @@ def _uniform_index(
         retry += 1
 
 
-def paired_cluster_bootstrap(
-    differences_by_cluster: Mapping[str, Sequence[float]],
+def _cluster_mean_bootstrap(
+    observations_by_cluster: Mapping[str, Sequence[float]],
     *,
-    confidence_level: float = 0.95,
-    resamples: int = 10_000,
-    seed: Seed = "fissionspec-paired-cluster-bootstrap-v1",
+    confidence_level: float,
+    resamples: int,
+    seed: Seed,
+    method: str,
+    estimand: str,
+    rng_stream: str,
 ) -> BootstrapInterval:
-    """Bootstrap the equally weighted mean of paired cluster means.
-
-    Each mapping value may contain several matched observations from one
-    independent cluster. The cluster is reduced to its mean before resampling,
-    preventing pseudoreplication when one seed contributes more rows.
-    """
-
     confidence = _probability(confidence_level, field="confidence_level")
     _positive_integer(resamples, field="resamples")
     if resamples < 100:
         raise ValueError("resamples must be at least 100 for an interval")
-    if len(differences_by_cluster) < 2:
-        raise ValueError("paired cluster bootstrap needs at least two clusters")
-    cluster_ids = tuple(sorted(differences_by_cluster))
+    if len(observations_by_cluster) < 2:
+        raise ValueError("cluster bootstrap needs at least two clusters")
+    cluster_ids = tuple(sorted(observations_by_cluster))
     if any(not cluster_id for cluster_id in cluster_ids):
         raise ValueError("cluster identifiers must be non-empty strings")
     cluster_means = tuple(
         _mean(
             _finite_values(
-                differences_by_cluster[cluster_id],
+                observations_by_cluster[cluster_id],
                 field=f"cluster {cluster_id!r}",
                 minimum=1,
             )
@@ -223,6 +221,7 @@ def paired_cluster_bootstrap(
         for draw in range(len(cluster_means)):
             index = _uniform_index(
                 rng,
+                stream=rng_stream,
                 resample=resample,
                 draw=draw,
                 upper=len(cluster_means),
@@ -232,7 +231,7 @@ def paired_cluster_bootstrap(
         estimates.append(_mean(selected))
     tail = (1.0 - confidence) / 2.0
     return BootstrapInterval(
-        method="paired-percentile-cluster-bootstrap",
+        method=method,
         confidence_level=confidence,
         point_estimate=_mean(cluster_means),
         lower=_quantile(estimates, tail),
@@ -242,7 +241,62 @@ def paired_cluster_bootstrap(
         resamples=resamples,
         seed_provenance=rng.provenance,
         resample_fingerprint_sha256=fingerprint.hexdigest(),
+        estimand=estimand,
+    )
+
+
+def paired_cluster_bootstrap(
+    differences_by_cluster: Mapping[str, Sequence[float]],
+    *,
+    confidence_level: float = 0.95,
+    resamples: int = 10_000,
+    seed: Seed = "fissionspec-paired-cluster-bootstrap-v1",
+) -> BootstrapInterval:
+    """Bootstrap the equally weighted mean of paired cluster differences.
+
+    Each mapping value may contain several matched differences from one
+    independent cluster. The cluster is reduced to its mean before resampling,
+    preventing pseudoreplication when one seed contributes more rows.
+    """
+
+    if len(differences_by_cluster) < 2:
+        raise ValueError("paired cluster bootstrap needs at least two clusters")
+    return _cluster_mean_bootstrap(
+        differences_by_cluster,
+        confidence_level=confidence_level,
+        resamples=resamples,
+        seed=seed,
+        method="paired-percentile-cluster-bootstrap",
         estimand="equally weighted mean of within-cluster paired differences",
+        rng_stream="paired-cluster-bootstrap",
+    )
+
+
+def one_sample_cluster_mean_interval(
+    observations_by_cluster: Mapping[str, Sequence[float]],
+    *,
+    confidence_level: float = 0.95,
+    resamples: int = 10_000,
+    seed: Seed = "fissionspec-one-sample-cluster-mean-bootstrap-v1",
+) -> BootstrapInterval:
+    """Bootstrap an equally weighted one-sample mean over independent clusters.
+
+    This path is deliberately distinct from :func:`paired_cluster_bootstrap`:
+    the inputs are observations of one quantity, not candidate-minus-baseline
+    differences. Multiple observations within a cluster are reduced to one
+    cluster mean before resampling.
+    """
+
+    if len(observations_by_cluster) < 2:
+        raise ValueError("one-sample cluster interval needs at least two clusters")
+    return _cluster_mean_bootstrap(
+        observations_by_cluster,
+        confidence_level=confidence_level,
+        resamples=resamples,
+        seed=seed,
+        method="one-sample-percentile-cluster-mean-bootstrap",
+        estimand="equally weighted mean of within-cluster observations",
+        rng_stream="one-sample-cluster-mean-bootstrap",
     )
 
 
@@ -311,6 +365,260 @@ def bounded_mean_confidence_sequence(
             )
         )
     return tuple(sequence)
+
+
+def _regularized_incomplete_beta(
+    x: float,
+    a: float,
+    b: float,
+) -> float:
+    """Evaluate the regularized incomplete beta function without dependencies."""
+
+    if not 0.0 <= x <= 1.0 or a <= 0.0 or b <= 0.0:
+        raise ValueError("incomplete-beta arguments are outside their domain")
+    if x in {0.0, 1.0}:
+        return x
+
+    def continued_fraction(first: float, second: float, value: float) -> float:
+        maximum_iterations = 400
+        epsilon = 3.0e-14
+        floor = 1.0e-300
+        qab = first + second
+        qap = first + 1.0
+        qam = first - 1.0
+        c = 1.0
+        d = 1.0 - qab * value / qap
+        if abs(d) < floor:
+            d = floor
+        d = 1.0 / d
+        result = d
+        for iteration in range(1, maximum_iterations + 1):
+            doubled = 2 * iteration
+            coefficient = (
+                iteration * (second - iteration) * value / ((qam + doubled) * (first + doubled))
+            )
+            d = 1.0 + coefficient * d
+            if abs(d) < floor:
+                d = floor
+            c = 1.0 + coefficient / c
+            if abs(c) < floor:
+                c = floor
+            d = 1.0 / d
+            result *= d * c
+            coefficient = -(
+                (first + iteration)
+                * (qab + iteration)
+                * value
+                / ((first + doubled) * (qap + doubled))
+            )
+            d = 1.0 + coefficient * d
+            if abs(d) < floor:
+                d = floor
+            c = 1.0 + coefficient / c
+            if abs(c) < floor:
+                c = floor
+            d = 1.0 / d
+            delta = d * c
+            result *= delta
+            if abs(delta - 1.0) <= epsilon:
+                return result
+        raise ArithmeticError("incomplete-beta continued fraction did not converge")
+
+    log_front = (
+        math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x)
+    )
+    front = math.exp(log_front)
+    if x < (a + 1.0) / (a + b + 2.0):
+        return front * continued_fraction(a, b, x) / a
+    return 1.0 - front * continued_fraction(b, a, 1.0 - x) / b
+
+
+def _student_t_cdf(value: float, degrees_of_freedom: int) -> float:
+    if degrees_of_freedom <= 0:
+        raise ValueError("degrees_of_freedom must be positive")
+    if value == 0.0:
+        return 0.5
+    ratio = degrees_of_freedom / (degrees_of_freedom + value * value)
+    tail = 0.5 * _regularized_incomplete_beta(
+        ratio,
+        degrees_of_freedom / 2.0,
+        0.5,
+    )
+    return 1.0 - tail if value > 0.0 else tail
+
+
+@lru_cache(maxsize=256)
+def student_t_quantile(probability: float, degrees_of_freedom: int) -> float:
+    """Return a numerically inverted Student-t quantile.
+
+    The implementation uses the exact incomplete-beta representation of the
+    Student-t CDF and deterministic bisection. It is dependency-free so the
+    frozen inference protocol has no library-version-specific critical values.
+    """
+
+    probability_value = _probability(probability, field="probability")
+    if (
+        isinstance(degrees_of_freedom, bool)
+        or not isinstance(degrees_of_freedom, int)
+        or degrees_of_freedom <= 0
+    ):
+        raise ValueError("degrees_of_freedom must be a positive integer")
+    if probability_value < 0.5:
+        return -student_t_quantile(1.0 - probability_value, degrees_of_freedom)
+    if probability_value == 0.5:
+        return 0.0
+    lower = 0.0
+    upper = 1.0
+    while _student_t_cdf(upper, degrees_of_freedom) < probability_value:
+        upper *= 2.0
+        if upper > 1.0e12:
+            raise ArithmeticError("Student-t quantile bracket overflow")
+    for _ in range(100):
+        midpoint = (lower + upper) / 2.0
+        if _student_t_cdf(midpoint, degrees_of_freedom) < probability_value:
+            lower = midpoint
+        else:
+            upper = midpoint
+    return (lower + upper) / 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class FixedLookInterval:
+    """One interval in a finite-look, finite-family sequential design."""
+
+    method: str
+    observations: int
+    mean: float
+    lower: float
+    upper: float
+    half_width: float
+    familywise_alpha: float
+    hypotheses: int
+    scheduled_looks: int
+    per_interval_alpha: float
+    critical_value: float
+    standard_error: float | None
+    degrees_of_freedom: int | None
+    assumptions: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return cast(dict[str, object], asdict(self))
+
+
+def fixed_look_student_t_interval(
+    values: Sequence[float],
+    *,
+    lower_bound: float,
+    upper_bound: float,
+    familywise_alpha: float,
+    hypotheses: int,
+    scheduled_looks: int,
+) -> FixedLookInterval:
+    """Return a simultaneous repeated-look Student-t interval.
+
+    Bonferroni allocation over every registered endpoint and look controls
+    familywise noncoverage under the stated Student-t pivot model. This is an
+    assumption-bounded primary interval, not a distribution-free claim.
+    """
+
+    observations = _finite_values(values, field="values", minimum=2)
+    alpha = _probability(familywise_alpha, field="familywise_alpha")
+    hypothesis_count = _positive_integer(hypotheses, field="hypotheses")
+    look_count = _positive_integer(scheduled_looks, field="scheduled_looks")
+    if (
+        not math.isfinite(lower_bound)
+        or not math.isfinite(upper_bound)
+        or lower_bound >= upper_bound
+    ):
+        raise ValueError("bounds must be finite and strictly ordered")
+    if any(value < lower_bound or value > upper_bound for value in observations):
+        raise ValueError("every observation must lie inside the predeclared bounds")
+    interval_alpha = alpha / (hypothesis_count * look_count)
+    degrees_of_freedom = len(observations) - 1
+    critical = student_t_quantile(1.0 - interval_alpha / 2.0, degrees_of_freedom)
+    center = _mean(observations)
+    sample_sd = _sample_standard_deviation(observations)
+    standard_error = sample_sd / math.sqrt(len(observations))
+    radius = critical * standard_error
+    lower = max(lower_bound, center - radius)
+    upper = min(upper_bound, center + radius)
+    return FixedLookInterval(
+        method="bonferroni-fixed-look-student-t",
+        observations=len(observations),
+        mean=center,
+        lower=lower,
+        upper=upper,
+        half_width=max(center - lower, upper - center),
+        familywise_alpha=alpha,
+        hypotheses=hypothesis_count,
+        scheduled_looks=look_count,
+        per_interval_alpha=interval_alpha,
+        critical_value=critical,
+        standard_error=standard_error,
+        degrees_of_freedom=degrees_of_freedom,
+        assumptions=(
+            "independent identically distributed paired block improvements",
+            "the Studentized paired-block mean follows its Student-t reference law",
+            "all endpoints and looks were registered before observing accelerator metrics",
+        ),
+    )
+
+
+def fixed_look_hoeffding_interval(
+    values: Sequence[float],
+    *,
+    lower_bound: float,
+    upper_bound: float,
+    familywise_alpha: float,
+    hypotheses: int,
+    scheduled_looks: int,
+) -> FixedLookInterval:
+    """Return a distribution-free simultaneous sensitivity interval.
+
+    A union bound covers every registered endpoint and scheduled look. Unlike
+    the primary Student-t interval, this requires only independent bounded
+    paired blocks, but it is intentionally expected to be much wider.
+    """
+
+    observations = _finite_values(values, field="values", minimum=1)
+    alpha = _probability(familywise_alpha, field="familywise_alpha")
+    hypothesis_count = _positive_integer(hypotheses, field="hypotheses")
+    look_count = _positive_integer(scheduled_looks, field="scheduled_looks")
+    if (
+        not math.isfinite(lower_bound)
+        or not math.isfinite(upper_bound)
+        or lower_bound >= upper_bound
+    ):
+        raise ValueError("bounds must be finite and strictly ordered")
+    if any(value < lower_bound or value > upper_bound for value in observations):
+        raise ValueError("every observation must lie inside the predeclared bounds")
+    interval_alpha = alpha / (hypothesis_count * look_count)
+    center = _mean(observations)
+    radius = (upper_bound - lower_bound) * math.sqrt(
+        math.log(2.0 / interval_alpha) / (2.0 * len(observations))
+    )
+    lower = max(lower_bound, center - radius)
+    upper = min(upper_bound, center + radius)
+    return FixedLookInterval(
+        method="bonferroni-fixed-look-hoeffding-sensitivity",
+        observations=len(observations),
+        mean=center,
+        lower=lower,
+        upper=upper,
+        half_width=max(center - lower, upper - center),
+        familywise_alpha=alpha,
+        hypotheses=hypothesis_count,
+        scheduled_looks=look_count,
+        per_interval_alpha=interval_alpha,
+        critical_value=radius,
+        standard_error=None,
+        degrees_of_freedom=None,
+        assumptions=(
+            "independent paired block improvements",
+            "paired block improvements remain in the predeclared bounds",
+            "all endpoints and looks were registered before observing accelerator metrics",
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)

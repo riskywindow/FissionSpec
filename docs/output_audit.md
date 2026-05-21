@@ -121,8 +121,11 @@ Four aggregate inferential gates form one preregistered family:
 
 The familywise alpha is divided by four with Bonferroni. Event rates use an
 exact one-sided Clopper–Pearson upper bound. TV and JS use the deterministic
-paired cluster bootstrap, resampling `cluster_id` rather than token positions.
-The report stores the resample fingerprint, seed provenance, family membership,
+one-sample cluster-mean bootstrap, resampling `cluster_id` rather than token
+positions. These are intervals on nonnegative per-record divergence
+observations—not paired policy differences—even though each divergence was
+computed from a paired reference/candidate output. The report stores the
+estimand, method, resample fingerprint, seed provenance, family membership,
 per-test alpha, and simultaneous confidence level. Per-slice gates are
 deterministic tolerance checks, not unregistered slice-wise hypothesis tests.
 
@@ -134,6 +137,12 @@ for claiming equivalence of arbitrary quantization changes.
 ## Fully offline workflow
 
 Exercise the entire path without downloads or an ML framework:
+
+```bash
+make output-audit-smoke
+```
+
+The equivalent explicit commands are:
 
 ```bash
 PYTHONPATH=src python tools/run_output_audit.py \

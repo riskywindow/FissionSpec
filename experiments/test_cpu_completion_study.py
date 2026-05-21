@@ -47,7 +47,8 @@ class DesignTests(unittest.TestCase):
 
         self.assertEqual(len(config.seeds), 30)
         self.assertEqual(len(set(config.seeds)), 30)
-        self.assertGreaterEqual(config.bootstrap_resamples, 2_000)
+        self.assertGreaterEqual(config.bootstrap_resamples, 20_000)
+        self.assertGreaterEqual(config.sequential_monte_carlo_trials, 2_000)
         self.assertEqual(config.oracle_jobs, 6)
 
 
@@ -128,6 +129,17 @@ class BundleTests(unittest.TestCase):
         assert isinstance(intervals, list)
         self.assertEqual(len(intervals), 12 * 3)
         self.assertTrue(all(entry["clusters"] == 2 for entry in intervals))
+        for entry in intervals:
+            interval = entry["interval_on_cluster_mean"]
+            assert isinstance(interval, dict)
+            self.assertEqual(
+                interval["method"],
+                "one-sample-percentile-cluster-mean-bootstrap",
+            )
+            self.assertEqual(
+                interval["estimand"],
+                "equally weighted mean of within-cluster observations",
+            )
 
     def test_validation_headlines_have_paired_multiplicity_aware_intervals(self) -> None:
         uncertainty = self._json("uncertainty.json")
@@ -165,6 +177,31 @@ class BundleTests(unittest.TestCase):
         assert isinstance(cases, list)
         self.assertEqual(len(cases), 3)
         self.assertTrue(all(case["witness"] for case in cases))
+
+    def test_sequential_diagnostic_is_pre_gpu_familywise_and_assumption_bounded(self) -> None:
+        diagnostic = self._json("sequential_inference.json")
+        self.assertFalse(diagnostic["uses_accelerator_observations"])
+        feasibility = diagnostic["feasibility"]
+        assert isinstance(feasibility, dict)
+        self.assertEqual(feasibility["hypotheses"], 24)
+        self.assertGreater(
+            feasibility["original_endpointwise_hoeffding_radius_at_maximum"],
+            feasibility["target_half_width"],
+        )
+        calibration = diagnostic["monte_carlo"]
+        assert isinstance(calibration, dict)
+        self.assertEqual(calibration["trials"], 100)
+        scenarios = calibration["scenarios"]
+        assert isinstance(scenarios, list)
+        by_name = {entry["name"]: entry for entry in scenarios}
+        self.assertLess(
+            by_name["adversarial-skewed-null"]["primary_all_look_coverage_rate"],
+            0.9,
+        )
+        self.assertGreaterEqual(
+            by_name["adversarial-skewed-null"]["sensitivity_all_look_coverage_rate"],
+            0.95,
+        )
 
     def test_ci_bundle_is_byte_identical_on_rerun(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

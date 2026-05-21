@@ -2,7 +2,7 @@
 
 **Status:** protocol frozen before accelerator measurements
 
-**Protocol version:** 1
+**Protocol version:** 2
 **CPU-only model output is not pilot GPU evidence.**
 
 This protocol makes accelerator work a sequence of falsification gates. A later
@@ -146,39 +146,68 @@ lower-is-better metrics. Raw units and ratios are also reported.
 
 ## 6. Sequential inference fixed in advance
 
-Each confirmatory family uses paired seed clusters, deterministic resampling,
-and family-wise error `0.05`. The primary family contains the four primary
-metrics times two model pairs times three non-overload validation arrival
-classes. Bonferroni simultaneous intervals are conservative but auditable.
-Secondary results are labeled exploratory.
+Protocol version 1 was rejected before accelerator observation. Its
+endpointwise 95% alpha-spending Hoeffding radius was `0.679197` at the 50-block
+cap, so its 0.03 precision target was mathematically unreachable; it also
+failed to allocate error across the 24 endpoints declared here. No accelerator
+result exists under that rule.
 
-For every confirmatory cell:
+Version 2 registers family ID `gpu-primary-family-v2`, paired seed/trace
+clusters, and family-wise error `0.05`. The ordered primary family is exactly
+four metrics times two model pairs times three non-overload validation
+anchors, or 24 endpoint IDs. Secondary results are labeled exploratory.
 
-- minimum independent paired blocks: `10`;
-- maximum independent paired blocks: `50`;
-- inspect only at completed block counts `10, 15, 20, ..., 50`;
-- confidence sequence: alpha-spending Hoeffding with predeclared bounds
-  `[-1, 1]`;
-- precision success: simultaneous half-width at most `0.03`;
-- efficacy stop: lower bound exceeds `0` **and** the upper bound is not below
-  the minimum worthwhile improvement `0.03`;
-- futility stop: upper bound is below `0.03` and the interval is not wholly
-  positive;
-- positive-but-below-MWI stop: the interval is wholly above `0` and wholly
-  below `0.03`; this is terminal evidence of a positive but practically
-  insufficient effect, not headline efficacy; and
-- otherwise stop at `50` and report the interval without binary success.
+There are nine looks at completed block counts `10, 15, 20, ..., 50`. At every
+look, each endpoint receives a two-sided interval error
 
-Stopping applies to a complete multiplicity family, not whichever cell first
-looks favorable. All completed blocks remain in the analysis. Hardware or
-software failures are excluded only by an error code defined before inspecting
-metric values, and the paired counterpart is excluded with them.
-The executable ordering of these overlapping boundaries is frozen in
-`fissionspec.experiment_design.evaluate_sequential_gate`.
+```text
+0.05 / (24 endpoints * 9 looks) = 0.000231481481...
+```
+
+The primary interval is the paired-mean Student-\(t\) interval at that level,
+intersected with `[-1, 1]`. The endpoint/look Bonferroni allocation controls
+familywise noncoverage under arbitrary endpoint dependence if independent,
+identically distributed paired-block Studentized means follow their
+Student-\(t\) reference laws. The latter is an explicit working-model
+assumption, not a distribution-free claim. Every look additionally reports a
+Hoeffding interval with the same 24-by-9 allocation. That sensitivity interval
+assumes only independent bounded paired blocks, never drives the primary
+stop, and is expected to be much wider.
+
+For every endpoint, the executable rule order is:
+
+1. if `L > 0` and `U < 0.03`, stop as
+   `positive_below_minimum_worthwhile_improvement`;
+2. else if `U < 0.03`, stop as `futility`;
+3. else if `L > 0.03`, stop as `efficacy`;
+4. else if the maximum distance from the point estimate to an interval endpoint
+   is at most `0.03`, stop as `precise_inconclusive`;
+5. else at 50 blocks stop as `maximum_reached`;
+6. otherwise continue.
+
+The campaign claim is conjunctive across all 24 endpoints. The orchestrator
+evaluates only synchronized family looks. Any endpoint ruling out the 0.03 MWI
+terminates the registered family in futility; favorable early stopping
+requires every endpoint's lower bound to exceed 0.03. This strict rule can
+save replays after a decisive negative outcome without selecting a favorable
+cell. Mixed unresolved evidence continues to the next look or the hard cap.
+
+All completed blocks remain in the analysis. Hardware or software failures are
+excluded only by an error code defined before inspecting metric values, and
+the paired counterpart is excluded with them. Runtime protocol version,
+family ID, ordered endpoint IDs, and synchronized block count must match
+exactly or evaluation fails closed. The executable endpoint and family rules
+are `evaluate_sequential_gate` and `evaluate_sequential_family`; feasibility
+and deterministic Monte Carlo diagnostics are frozen in
+`docs/sequential_inference.md`.
 
 Power planning uses the paired pilot variance but never its observed mean.
 Recommended replication is computed for standardized effects `0.3`, `0.5`, and
-`0.8`; the sequential maximum remains `50`.
+`0.8`; the sequential maximum remains `50`. The 0.03 primary half-width is
+attainable at 50 blocks only when observed paired-block SD is at most
+`0.0533731`. At SD `0.05`, worthwhile efficacy at the cap requires an observed
+mean above approximately `0.0581040`. High-variance effects are expected to
+reach the cap rather than manufacture an early decision.
 
 Every replay yields all four primary metrics, so metrics do not multiply the
 number of accelerator executions. For the primary candidate-versus-SPECTRE
@@ -230,9 +259,16 @@ Start with Qwen3-8B/0.6B on one available H100. Measure:
 - prefill at prompt lengths `{128, 2K, 16K}`; and
 - local and remote draft transport at payload sizes used by the protocol.
 
-Each microbenchmark has 20 warmups, then paired randomized samples until its
-95% confidence-sequence relative half-width is at most 2% or 100 samples.
-Kernel/graph identity and physical tensor shapes are logged for every sample.
+Each microbenchmark has 20 warmups, then up to 100 paired randomized samples.
+The calibration manifest reserves at most 64 named measurement series,
+including every possible intermediate-row refinement, before any timing is
+read. Series are inspected only at 20, 40, 60, 80, and 100 samples. Each uses
+a two-sided Student-\(t\) interval with error `0.05 / (64 * 5)`; a series may
+stop when its interval half-width divided by the absolute sample mean is at
+most 2%. This is a separate assumption-bounded estimation family, not the
+24-endpoint policy family and not an unadjusted 95% confidence sequence.
+Inactive reserved series consume no samples. Kernel/graph identity and
+physical tensor shapes are logged for every sample.
 
 Add intermediate batch points `{2, 4, 16}` only when monotone interpolation
 from adjacent anchors has more than 3% leave-one-anchor-out error. This adaptive

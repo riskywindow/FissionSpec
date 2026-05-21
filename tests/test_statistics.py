@@ -5,10 +5,14 @@ import unittest
 from fissionspec.statistics import (
     bonferroni_metadata,
     bounded_mean_confidence_sequence,
+    fixed_look_hoeffding_interval,
+    fixed_look_student_t_interval,
+    one_sample_cluster_mean_interval,
     paired_cluster_bootstrap,
     paired_effect_size,
     paired_replication_plan,
     precision_stopping,
+    student_t_quantile,
 )
 
 
@@ -90,6 +94,29 @@ class ClusterBootstrapTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 100"):
             paired_cluster_bootstrap({"a": (1.0,), "b": (2.0,)}, resamples=99)
 
+    def test_one_sample_interval_has_truthful_method_and_estimand(self) -> None:
+        observations = {
+            "seed-2": (2.0, 4.0),
+            "seed-1": (1.0,),
+            "seed-3": (8.0,),
+        }
+        interval = one_sample_cluster_mean_interval(
+            observations,
+            confidence_level=0.9,
+            resamples=500,
+            seed="one-sample-test",
+        )
+
+        self.assertEqual(interval.method, "one-sample-percentile-cluster-mean-bootstrap")
+        self.assertEqual(
+            interval.estimand,
+            "equally weighted mean of within-cluster observations",
+        )
+        self.assertAlmostEqual(interval.point_estimate, 4.0)
+        self.assertNotIn("paired", interval.method)
+        with self.assertRaisesRegex(ValueError, "at least two clusters"):
+            one_sample_cluster_mean_interval({"only": (1.0,)})
+
 
 class SequentialInferenceTests(unittest.TestCase):
     def test_confidence_sequence_is_simultaneous_and_contracts(self) -> None:
@@ -134,6 +161,41 @@ class SequentialInferenceTests(unittest.TestCase):
                 lower_bound=0.0,
                 upper_bound=1.0,
             )
+
+    def test_student_t_quantile_matches_reference_values(self) -> None:
+        self.assertAlmostEqual(student_t_quantile(0.975, 1), 12.706204736, places=8)
+        self.assertAlmostEqual(student_t_quantile(0.975, 9), 2.262157163, places=8)
+        self.assertAlmostEqual(student_t_quantile(0.975, 49), 2.009575235, places=8)
+
+    def test_fixed_look_intervals_allocate_across_family_and_looks(self) -> None:
+        values = tuple(0.04 + 0.01 * (-1) ** index for index in range(20))
+        primary = fixed_look_student_t_interval(
+            values,
+            lower_bound=-1.0,
+            upper_bound=1.0,
+            familywise_alpha=0.05,
+            hypotheses=24,
+            scheduled_looks=9,
+        )
+        sensitivity = fixed_look_hoeffding_interval(
+            values,
+            lower_bound=-1.0,
+            upper_bound=1.0,
+            familywise_alpha=0.05,
+            hypotheses=24,
+            scheduled_looks=9,
+        )
+
+        self.assertEqual(primary.method, "bonferroni-fixed-look-student-t")
+        self.assertAlmostEqual(primary.per_interval_alpha, 0.05 / (24 * 9))
+        self.assertEqual(primary.degrees_of_freedom, 19)
+        self.assertIsNotNone(primary.standard_error)
+        self.assertLess(primary.half_width, sensitivity.half_width)
+        self.assertEqual(
+            sensitivity.method,
+            "bonferroni-fixed-look-hoeffding-sensitivity",
+        )
+        self.assertIsNone(sensitivity.standard_error)
 
 
 class PlanningTests(unittest.TestCase):

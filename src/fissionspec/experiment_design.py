@@ -4,13 +4,37 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Final, Literal, cast
 
-from .statistics import ConfidenceSequencePoint, bounded_mean_confidence_sequence
+from .rng import CounterRNG, Seed
+from .statistics import (
+    FixedLookInterval,
+    fixed_look_hoeffding_interval,
+    fixed_look_student_t_interval,
+    student_t_quantile,
+)
 
 MetricDirection = Literal["higher", "lower"]
+DiagnosticDistribution = Literal["normal", "symmetric-two-point", "skewed-bounded"]
+
+SEQUENTIAL_PROTOCOL_VERSION: Final = 2
+PRIMARY_FAMILY_ID: Final = "gpu-primary-family-v2"
+PRIMARY_MODEL_PAIRS: Final = ("qwen3-32b__qwen3-0.6b", "llama3.1-70b__llama3.2-1b")
+PRIMARY_VALIDATION_ANCHORS: Final = ("v1-mmpp", "v2-pareto", "v3-replay")
+PRIMARY_METRICS: Final = (
+    "tbt-slo-goodput",
+    "p99-tbt",
+    "conditional-hit-delay",
+    "one-miss-target-step-time",
+)
+PRIMARY_HYPOTHESIS_IDS: Final = tuple(
+    f"{model_pair}/{anchor}/{metric}"
+    for model_pair in PRIMARY_MODEL_PAIRS
+    for anchor in PRIMARY_VALIDATION_ANCHORS
+    for metric in PRIMARY_METRICS
+)
 
 
 def symmetric_improvement(
@@ -57,16 +81,31 @@ def paired_block_order(block_index: int) -> tuple[str, str, str, str]:
 
 @dataclass(frozen=True, slots=True)
 class SequentialGateConfig:
-    """Predeclared stopping parameters for one paired metric."""
+    """Versioned finite-family, finite-look stopping declaration."""
 
+    protocol_version: int = SEQUENTIAL_PROTOCOL_VERSION
+    family_id: str = PRIMARY_FAMILY_ID
+    hypothesis_ids: tuple[str, ...] = PRIMARY_HYPOTHESIS_IDS
     minimum_blocks: int = 10
     maximum_blocks: int = 50
     look_every: int = 5
-    confidence_level: float = 0.95
+    familywise_alpha: float = 0.05
     target_half_width: float = 0.03
     minimum_worthwhile_improvement: float = 0.03
 
     def __post_init__(self) -> None:
+        if self.protocol_version != SEQUENTIAL_PROTOCOL_VERSION:
+            raise ValueError(
+                f"protocol_version must equal frozen version {SEQUENTIAL_PROTOCOL_VERSION}"
+            )
+        if not isinstance(self.family_id, str) or not self.family_id:
+            raise ValueError("family_id must be a non-empty string")
+        if (
+            not self.hypothesis_ids
+            or any(not isinstance(item, str) or not item for item in self.hypothesis_ids)
+            or len(self.hypothesis_ids) != len(set(self.hypothesis_ids))
+        ):
+            raise ValueError("hypothesis_ids must be non-empty unique strings")
         for integer_field, integer_value in (
             ("minimum_blocks", self.minimum_blocks),
             ("maximum_blocks", self.maximum_blocks),
@@ -85,12 +124,12 @@ class SequentialGateConfig:
         if self.maximum_blocks % self.look_every != 0:
             raise ValueError("maximum_blocks must fall on a scheduled look")
         if (
-            isinstance(self.confidence_level, bool)
-            or not isinstance(self.confidence_level, (int, float))
-            or not math.isfinite(self.confidence_level)
-            or not 0.0 < self.confidence_level < 1.0
+            isinstance(self.familywise_alpha, bool)
+            or not isinstance(self.familywise_alpha, (int, float))
+            or not math.isfinite(self.familywise_alpha)
+            or not 0.0 < self.familywise_alpha < 1.0
         ):
-            raise ValueError("confidence_level must be strictly between zero and one")
+            raise ValueError("familywise_alpha must be strictly between zero and one")
         for float_field, float_value in (
             ("target_half_width", self.target_half_width),
             (
@@ -106,6 +145,39 @@ class SequentialGateConfig:
                 or float_value > 1.0
             ):
                 raise ValueError(f"{float_field} must be finite and in (0, 1]")
+
+    @property
+    def scheduled_looks(self) -> tuple[int, ...]:
+        return tuple(
+            range(
+                self.minimum_blocks,
+                self.maximum_blocks + 1,
+                self.look_every,
+            )
+        )
+
+    @property
+    def per_interval_alpha(self) -> float:
+        return self.familywise_alpha / (len(self.hypothesis_ids) * len(self.scheduled_looks))
+
+    @property
+    def simultaneous_interval_confidence_level(self) -> float:
+        return 1.0 - self.per_interval_alpha
+
+    def validate_observed_family(
+        self,
+        *,
+        family_id: str,
+        hypothesis_ids: Sequence[str],
+    ) -> None:
+        """Fail closed unless runtime family metadata exactly matches the protocol."""
+
+        if family_id != self.family_id:
+            raise ValueError("observed family_id does not match the frozen protocol")
+        if tuple(hypothesis_ids) != self.hypothesis_ids:
+            raise ValueError(
+                "observed hypothesis_ids do not exactly match the frozen ordered family"
+            )
 
 
 class GateStatus(StrEnum):
@@ -127,8 +199,25 @@ class SequentialGateDecision:
     status: GateStatus
     terminal: bool
     blocks: int
-    interval: ConfidenceSequencePoint | None
+    interval: FixedLookInterval | None
+    distribution_free_sensitivity: FixedLookInterval | None
     rule: str
+    protocol_version: int
+    family_id: str
+    hypothesis_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class SequentialFamilyDecision:
+    """One synchronized decision for the conjunctive 24-endpoint family."""
+
+    status: GateStatus
+    terminal: bool
+    blocks: int
+    endpoint_decisions: tuple[SequentialGateDecision, ...]
+    rule: str
+    protocol_version: int
+    family_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,11 +299,29 @@ class ExperimentSpendCaps:
 def evaluate_sequential_gate(
     improvements: Sequence[float],
     config: SequentialGateConfig | None = None,
+    *,
+    hypothesis_id: str,
+    observed_family_id: str,
+    observed_hypothesis_ids: Sequence[str],
 ) -> SequentialGateDecision:
-    """Evaluate the current look without consuming or discarding observations."""
+    """Evaluate one endpoint at a registered family look.
+
+    The primary interval is a repeated-look Student-t interval with a
+    Bonferroni allocation over every endpoint and look. Its finite-sample
+    calibration assumes the paired-block Studentized mean follows the
+    Student-t reference law. A bounded Hoeffding interval is always returned
+    beside it as a distribution-free sensitivity analysis and never drives
+    the primary stopping decision.
+    """
 
     if config is None:
         config = SequentialGateConfig()
+    config.validate_observed_family(
+        family_id=observed_family_id,
+        hypothesis_ids=observed_hypothesis_ids,
+    )
+    if hypothesis_id not in config.hypothesis_ids:
+        raise ValueError("hypothesis_id is not in the frozen family")
     values = tuple(float(value) for value in improvements)
     if not values:
         return SequentialGateDecision(
@@ -222,7 +329,11 @@ def evaluate_sequential_gate(
             terminal=False,
             blocks=0,
             interval=None,
+            distribution_free_sensitivity=None,
             rule="minimum independent paired blocks not reached",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+            hypothesis_id=hypothesis_id,
         )
     if len(values) > config.maximum_blocks:
         raise ValueError("observations exceed the predeclared maximum_blocks")
@@ -234,14 +345,28 @@ def evaluate_sequential_gate(
             terminal=False,
             blocks=len(values),
             interval=None,
+            distribution_free_sensitivity=None,
             rule="evaluate only at predeclared completed-block looks",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+            hypothesis_id=hypothesis_id,
         )
-    interval = bounded_mean_confidence_sequence(
+    interval = fixed_look_student_t_interval(
         values,
         lower_bound=-1.0,
         upper_bound=1.0,
-        confidence_level=config.confidence_level,
-    )[-1]
+        familywise_alpha=config.familywise_alpha,
+        hypotheses=len(config.hypothesis_ids),
+        scheduled_looks=len(config.scheduled_looks),
+    )
+    sensitivity = fixed_look_hoeffding_interval(
+        values,
+        lower_bound=-1.0,
+        upper_bound=1.0,
+        familywise_alpha=config.familywise_alpha,
+        hypotheses=len(config.hypothesis_ids),
+        scheduled_looks=len(config.scheduled_looks),
+    )
     positive = interval.lower > 0.0
     below_worthwhile = interval.upper < config.minimum_worthwhile_improvement
     if positive and below_worthwhile:
@@ -250,10 +375,14 @@ def evaluate_sequential_gate(
             terminal=True,
             blocks=len(values),
             interval=interval,
+            distribution_free_sensitivity=sensitivity,
             rule=(
                 "effect is statistically positive but its entire interval is "
                 "below the minimum worthwhile improvement"
             ),
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+            hypothesis_id=hypothesis_id,
         )
     if below_worthwhile:
         return SequentialGateDecision(
@@ -261,15 +390,25 @@ def evaluate_sequential_gate(
             terminal=True,
             blocks=len(values),
             interval=interval,
-            rule="upper confidence bound is below the minimum worthwhile improvement",
+            distribution_free_sensitivity=sensitivity,
+            rule=(
+                "upper simultaneous confidence bound is below the minimum worthwhile improvement"
+            ),
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+            hypothesis_id=hypothesis_id,
         )
-    if positive:
+    if interval.lower > config.minimum_worthwhile_improvement:
         return SequentialGateDecision(
             GateStatus.EFFICACY,
             terminal=True,
             blocks=len(values),
             interval=interval,
-            rule="lower confidence bound exceeds zero",
+            distribution_free_sensitivity=sensitivity,
+            rule=("lower simultaneous confidence bound exceeds the minimum worthwhile improvement"),
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+            hypothesis_id=hypothesis_id,
         )
     if interval.half_width <= config.target_half_width:
         return SequentialGateDecision(
@@ -277,7 +416,11 @@ def evaluate_sequential_gate(
             terminal=True,
             blocks=len(values),
             interval=interval,
+            distribution_free_sensitivity=sensitivity,
             rule="precision target reached without efficacy or futility",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+            hypothesis_id=hypothesis_id,
         )
     if len(values) == config.maximum_blocks:
         return SequentialGateDecision(
@@ -285,14 +428,498 @@ def evaluate_sequential_gate(
             terminal=True,
             blocks=len(values),
             interval=interval,
+            distribution_free_sensitivity=sensitivity,
             rule="predeclared maximum independent paired blocks reached",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+            hypothesis_id=hypothesis_id,
         )
     return SequentialGateDecision(
         GateStatus.CONTINUE,
         terminal=False,
         blocks=len(values),
         interval=interval,
+        distribution_free_sensitivity=sensitivity,
         rule="no terminal boundary crossed",
+        protocol_version=config.protocol_version,
+        family_id=config.family_id,
+        hypothesis_id=hypothesis_id,
+    )
+
+
+def evaluate_sequential_family(
+    improvements_by_hypothesis: Mapping[str, Sequence[float]],
+    config: SequentialGateConfig | None = None,
+    *,
+    observed_family_id: str,
+    observed_hypothesis_ids: Sequence[str],
+) -> SequentialFamilyDecision:
+    """Evaluate the synchronized conjunctive family and fail closed on drift.
+
+    Confirmatory family success requires every registered endpoint to establish
+    a worthwhile effect. Therefore one endpoint establishing practical
+    futility terminates the global claim, whereas a favorable stop requires
+    every endpoint to cross efficacy at the same accumulated look.
+    """
+
+    if config is None:
+        config = SequentialGateConfig()
+    config.validate_observed_family(
+        family_id=observed_family_id,
+        hypothesis_ids=observed_hypothesis_ids,
+    )
+    if set(improvements_by_hypothesis) != set(config.hypothesis_ids):
+        raise ValueError("improvements mapping does not exactly cover the frozen family")
+    lengths = {len(improvements_by_hypothesis[item]) for item in config.hypothesis_ids}
+    if len(lengths) != 1:
+        raise ValueError("every family endpoint must have the same completed block count")
+    decisions = tuple(
+        evaluate_sequential_gate(
+            improvements_by_hypothesis[hypothesis_id],
+            config,
+            hypothesis_id=hypothesis_id,
+            observed_family_id=observed_family_id,
+            observed_hypothesis_ids=observed_hypothesis_ids,
+        )
+        for hypothesis_id in config.hypothesis_ids
+    )
+    blocks = decisions[0].blocks
+    if decisions[0].status == GateStatus.NOT_A_LOOK:
+        return SequentialFamilyDecision(
+            status=GateStatus.NOT_A_LOOK,
+            terminal=False,
+            blocks=blocks,
+            endpoint_decisions=decisions,
+            rule="family decisions occur only at synchronized predeclared looks",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+        )
+    practically_futile = {
+        GateStatus.FUTILITY,
+        GateStatus.POSITIVE_BELOW_MWI,
+    }
+    if any(decision.status in practically_futile for decision in decisions):
+        return SequentialFamilyDecision(
+            status=GateStatus.FUTILITY,
+            terminal=True,
+            blocks=blocks,
+            endpoint_decisions=decisions,
+            rule=(
+                "at least one endpoint rules out the minimum worthwhile effect, "
+                "so the conjunctive family claim cannot succeed"
+            ),
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+        )
+    if all(decision.status == GateStatus.EFFICACY for decision in decisions):
+        return SequentialFamilyDecision(
+            status=GateStatus.EFFICACY,
+            terminal=True,
+            blocks=blocks,
+            endpoint_decisions=decisions,
+            rule="every registered endpoint establishes a minimum-worthwhile effect",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+        )
+    if blocks == config.maximum_blocks:
+        return SequentialFamilyDecision(
+            status=GateStatus.MAXIMUM_REACHED,
+            terminal=True,
+            blocks=blocks,
+            endpoint_decisions=decisions,
+            rule="hard maximum reached before a complete family decision",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+        )
+    if all(decision.terminal for decision in decisions):
+        return SequentialFamilyDecision(
+            status=GateStatus.PRECISE_INCONCLUSIVE,
+            terminal=True,
+            blocks=blocks,
+            endpoint_decisions=decisions,
+            rule="all endpoints are terminal but the conjunctive efficacy rule is not met",
+            protocol_version=config.protocol_version,
+            family_id=config.family_id,
+        )
+    return SequentialFamilyDecision(
+        status=GateStatus.CONTINUE,
+        terminal=False,
+        blocks=blocks,
+        endpoint_decisions=decisions,
+        rule="no family-level terminal boundary crossed",
+        protocol_version=config.protocol_version,
+        family_id=config.family_id,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SequentialFeasibilityDiagnostics:
+    """Pre-data width and effect thresholds for the frozen stopping design."""
+
+    protocol_version: int
+    family_id: str
+    hypotheses: int
+    looks: tuple[int, ...]
+    familywise_alpha: float
+    per_interval_alpha: float
+    target_half_width: float
+    assumed_standard_deviations: tuple[float, ...]
+    student_t_critical_values: tuple[tuple[int, float], ...]
+    maximum_sd_for_target_half_width: tuple[tuple[int, float], ...]
+    worthwhile_efficacy_mean_thresholds_at_maximum: tuple[tuple[float, float], ...]
+    original_endpointwise_hoeffding_radius_at_maximum: float
+    familywise_hoeffding_radius_at_maximum: float
+    conclusions: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return cast(dict[str, object], asdict(self))
+
+
+def sequential_gate_feasibility(
+    config: SequentialGateConfig | None = None,
+    *,
+    assumed_standard_deviations: Sequence[float] = (0.01, 0.03, 0.05, 0.10, 0.20),
+) -> SequentialFeasibilityDiagnostics:
+    """Quantify attainable widths before any accelerator observation."""
+
+    if config is None:
+        config = SequentialGateConfig()
+    deviations = tuple(float(value) for value in assumed_standard_deviations)
+    if not deviations or any(
+        not math.isfinite(value) or value < 0.0 or value > 1.0 for value in deviations
+    ):
+        raise ValueError("assumed_standard_deviations must be finite values in [0, 1]")
+    critical_values = tuple(
+        (
+            look,
+            student_t_quantile(
+                1.0 - config.per_interval_alpha / 2.0,
+                look - 1,
+            ),
+        )
+        for look in config.scheduled_looks
+    )
+    maximum_sd = tuple(
+        (
+            look,
+            config.target_half_width * math.sqrt(look) / critical,
+        )
+        for look, critical in critical_values
+    )
+    maximum_look, maximum_critical = critical_values[-1]
+    efficacy_thresholds = tuple(
+        (
+            deviation,
+            config.minimum_worthwhile_improvement
+            + maximum_critical * deviation / math.sqrt(maximum_look),
+        )
+        for deviation in deviations
+    )
+    original_alpha_at_maximum = 0.05 / (config.maximum_blocks * (config.maximum_blocks + 1))
+    original_radius = 2.0 * math.sqrt(
+        math.log(2.0 / original_alpha_at_maximum) / (2.0 * config.maximum_blocks)
+    )
+    familywise_radius = 2.0 * math.sqrt(
+        math.log(2.0 / config.per_interval_alpha) / (2.0 * config.maximum_blocks)
+    )
+    return SequentialFeasibilityDiagnostics(
+        protocol_version=config.protocol_version,
+        family_id=config.family_id,
+        hypotheses=len(config.hypothesis_ids),
+        looks=config.scheduled_looks,
+        familywise_alpha=config.familywise_alpha,
+        per_interval_alpha=config.per_interval_alpha,
+        target_half_width=config.target_half_width,
+        assumed_standard_deviations=deviations,
+        student_t_critical_values=critical_values,
+        maximum_sd_for_target_half_width=maximum_sd,
+        worthwhile_efficacy_mean_thresholds_at_maximum=efficacy_thresholds,
+        original_endpointwise_hoeffding_radius_at_maximum=original_radius,
+        familywise_hoeffding_radius_at_maximum=familywise_radius,
+        conclusions=(
+            "the version-1 Hoeffding rule cannot attain 0.03 half-width by 50 blocks",
+            "the distribution-free familywise sensitivity interval also cannot attain it",
+            "the primary Student-t rule can attain it only at the reported observed-SD thresholds",
+            "early stopping is assumption-bounded and must be accompanied by sensitivity intervals",
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SequentialCalibrationScenario:
+    """One frozen Monte Carlo data-generating process."""
+
+    name: str
+    distribution: DiagnosticDistribution
+    mean: float
+    standard_deviation: float
+    high_value_probability: float = 0.5
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("scenario name must not be empty")
+        if not math.isfinite(self.mean) or not -1.0 <= self.mean <= 1.0:
+            raise ValueError("scenario mean must be finite and in [-1, 1]")
+        if (
+            not math.isfinite(self.standard_deviation)
+            or self.standard_deviation < 0.0
+            or self.standard_deviation > 1.0
+        ):
+            raise ValueError("scenario standard_deviation must be in [0, 1]")
+        if (
+            not math.isfinite(self.high_value_probability)
+            or not 0.0 < self.high_value_probability < 1.0
+        ):
+            raise ValueError("high_value_probability must be in (0, 1)")
+
+
+DEFAULT_CALIBRATION_SCENARIOS: Final = (
+    SequentialCalibrationScenario("null-normal", "normal", 0.0, 0.08),
+    SequentialCalibrationScenario("small-normal", "normal", 0.01, 0.02),
+    SequentialCalibrationScenario("worthwhile-normal", "normal", 0.06, 0.04),
+    SequentialCalibrationScenario("worthwhile-low-variance", "normal", 0.06, 0.01),
+    SequentialCalibrationScenario(
+        "worthwhile-high-variance",
+        "symmetric-two-point",
+        0.06,
+        0.30,
+    ),
+    SequentialCalibrationScenario(
+        "adversarial-skewed-null",
+        "skewed-bounded",
+        0.0,
+        math.sqrt(1.0 / 19.0),
+        high_value_probability=0.05,
+    ),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioCalibrationResult:
+    """Coverage and stopping frequencies for one Monte Carlo scenario."""
+
+    name: str
+    distribution: str
+    mean: float
+    standard_deviation: float
+    trials: int
+    primary_all_look_coverage_rate: float
+    sensitivity_all_look_coverage_rate: float
+    mean_blocks_used: float
+    stop_rates: tuple[tuple[str, float], ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return cast(dict[str, object], asdict(self))
+
+
+@dataclass(frozen=True, slots=True)
+class SequentialCalibrationReport:
+    """Deterministic pre-data calibration of operating characteristics."""
+
+    protocol_version: int
+    family_id: str
+    trials: int
+    seed_provenance: str
+    scenarios: tuple[ScenarioCalibrationResult, ...]
+    normal_null_familywise_noncoverage_rate: float
+    normal_null_any_false_positive_rate: float
+    familywise_target: float
+    calibration_scope: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return cast(dict[str, object], asdict(self))
+
+
+def _diagnostic_normal(
+    rng: CounterRNG,
+    *,
+    trial: int,
+    stream: str,
+    draw: int,
+) -> float:
+    first = max(rng.uniform(trial, draw, f"{stream}/normal-u1", 0), 2.0**-53)
+    second = rng.uniform(trial, draw, f"{stream}/normal-u2", 0)
+    return math.sqrt(-2.0 * math.log(first)) * math.cos(2.0 * math.pi * second)
+
+
+def _scenario_draw(
+    scenario: SequentialCalibrationScenario,
+    rng: CounterRNG,
+    *,
+    trial: int,
+    draw: int,
+    stream: str,
+) -> float:
+    if scenario.distribution == "normal":
+        retry = 0
+        while True:
+            value = scenario.mean + scenario.standard_deviation * _diagnostic_normal(
+                rng,
+                trial=trial,
+                stream=f"{stream}/retry-{retry}",
+                draw=draw,
+            )
+            if -1.0 <= value <= 1.0:
+                return value
+            retry += 1
+    probability = scenario.high_value_probability
+    if scenario.distribution == "symmetric-two-point":
+        return scenario.mean + (
+            scenario.standard_deviation
+            if rng.bernoulli(0.5, trial, draw, f"{stream}/symmetric")
+            else -scenario.standard_deviation
+        )
+    if scenario.distribution == "skewed-bounded":
+        high = scenario.mean + scenario.standard_deviation * math.sqrt(
+            (1.0 - probability) / probability
+        )
+        low = scenario.mean - scenario.standard_deviation * math.sqrt(
+            probability / (1.0 - probability)
+        )
+        if low < -1.0 - 1e-12 or high > 1.0 + 1e-12:
+            raise ValueError("skewed bounded scenario support escapes [-1, 1]")
+        return (
+            min(1.0, high)
+            if rng.bernoulli(probability, trial, draw, f"{stream}/skewed")
+            else max(-1.0, low)
+        )
+    raise AssertionError(f"unknown diagnostic distribution {scenario.distribution!r}")
+
+
+def sequential_gate_monte_carlo(
+    config: SequentialGateConfig | None = None,
+    *,
+    trials: int = 2_000,
+    seed: Seed = "fissionspec-sequential-calibration-v2",
+    scenarios: Sequence[SequentialCalibrationScenario] = DEFAULT_CALIBRATION_SCENARIOS,
+) -> SequentialCalibrationReport:
+    """Calibrate coverage and stopping rates with counter-addressed draws.
+
+    Normal scenarios audit the working Student-t model; the skewed bounded
+    scenario intentionally exposes its non-robustness. The Hoeffding sensitivity
+    interval is evaluated on every scenario. This simulation documents operating
+    characteristics and does not replace the analytical Bonferroni guarantee.
+    """
+
+    if config is None:
+        config = SequentialGateConfig()
+    if isinstance(trials, bool) or not isinstance(trials, int) or trials < 100:
+        raise ValueError("trials must be an integer of at least 100")
+    scenario_values = tuple(scenarios)
+    if not scenario_values or len({item.name for item in scenario_values}) != len(scenario_values):
+        raise ValueError("scenarios must have unique non-empty names")
+    rng = CounterRNG(seed)
+    hypothesis_id = config.hypothesis_ids[0]
+    results: list[ScenarioCalibrationResult] = []
+    for scenario in scenario_values:
+        primary_covered = 0
+        sensitivity_covered = 0
+        blocks_used = 0
+        status_counts = {
+            status.value: 0 for status in GateStatus if status != GateStatus.NOT_A_LOOK
+        }
+        for trial in range(trials):
+            values = tuple(
+                _scenario_draw(
+                    scenario,
+                    rng,
+                    trial=trial,
+                    draw=draw,
+                    stream=f"scenario/{scenario.name}",
+                )
+                for draw in range(config.maximum_blocks)
+            )
+            primary_trial_covered = True
+            sensitivity_trial_covered = True
+            decision: SequentialGateDecision | None = None
+            for look in config.scheduled_looks:
+                current = evaluate_sequential_gate(
+                    values[:look],
+                    config,
+                    hypothesis_id=hypothesis_id,
+                    observed_family_id=config.family_id,
+                    observed_hypothesis_ids=config.hypothesis_ids,
+                )
+                assert current.interval is not None
+                assert current.distribution_free_sensitivity is not None
+                primary_trial_covered = primary_trial_covered and (
+                    current.interval.lower <= scenario.mean <= current.interval.upper
+                )
+                sensitivity_trial_covered = sensitivity_trial_covered and (
+                    current.distribution_free_sensitivity.lower
+                    <= scenario.mean
+                    <= current.distribution_free_sensitivity.upper
+                )
+                if decision is None and current.terminal:
+                    decision = current
+            if decision is None:
+                raise AssertionError("the maximum look must be terminal")
+            primary_covered += int(primary_trial_covered)
+            sensitivity_covered += int(sensitivity_trial_covered)
+            blocks_used += decision.blocks
+            status_counts[decision.status.value] += 1
+        results.append(
+            ScenarioCalibrationResult(
+                name=scenario.name,
+                distribution=scenario.distribution,
+                mean=scenario.mean,
+                standard_deviation=scenario.standard_deviation,
+                trials=trials,
+                primary_all_look_coverage_rate=primary_covered / trials,
+                sensitivity_all_look_coverage_rate=sensitivity_covered / trials,
+                mean_blocks_used=blocks_used / trials,
+                stop_rates=tuple(
+                    (status, count / trials) for status, count in sorted(status_counts.items())
+                ),
+            )
+        )
+
+    family_noncoverage = 0
+    family_false_positive = 0
+    null_sd = 0.08
+    for trial in range(trials):
+        any_noncoverage = False
+        any_false_positive = False
+        for hypothesis_index in range(len(config.hypothesis_ids)):
+            values = tuple(
+                null_sd
+                * _diagnostic_normal(
+                    rng,
+                    trial=trial,
+                    stream=f"family-null/{hypothesis_index}",
+                    draw=draw,
+                )
+                for draw in range(config.maximum_blocks)
+            )
+            for look in config.scheduled_looks:
+                interval = fixed_look_student_t_interval(
+                    values[:look],
+                    lower_bound=-1.0,
+                    upper_bound=1.0,
+                    familywise_alpha=config.familywise_alpha,
+                    hypotheses=len(config.hypothesis_ids),
+                    scheduled_looks=len(config.scheduled_looks),
+                )
+                any_noncoverage = any_noncoverage or not (interval.lower <= 0.0 <= interval.upper)
+                any_false_positive = any_false_positive or interval.lower > 0.0
+        family_noncoverage += int(any_noncoverage)
+        family_false_positive += int(any_false_positive)
+    return SequentialCalibrationReport(
+        protocol_version=config.protocol_version,
+        family_id=config.family_id,
+        trials=trials,
+        seed_provenance=rng.provenance,
+        scenarios=tuple(results),
+        normal_null_familywise_noncoverage_rate=family_noncoverage / trials,
+        normal_null_any_false_positive_rate=family_false_positive / trials,
+        familywise_target=config.familywise_alpha,
+        calibration_scope=(
+            "normal-null calibration uses all registered endpoints and scheduled looks",
+            "scenario coverage means simultaneous coverage across every scheduled look",
+            "normal draws outside [-1, 1] are rejected to respect the metric contract",
+            "skewed bounded calibration is an adversarial sensitivity diagnostic",
+            "Monte Carlo results are diagnostics, not proof or accelerator evidence",
+        ),
     )
 
 
@@ -457,16 +1084,32 @@ def select_farthest_cells(
 
 
 __all__ = [
+    "DEFAULT_CALIBRATION_SCENARIOS",
+    "PRIMARY_FAMILY_ID",
+    "PRIMARY_HYPOTHESIS_IDS",
+    "PRIMARY_METRICS",
+    "PRIMARY_MODEL_PAIRS",
+    "PRIMARY_VALIDATION_ANCHORS",
+    "SEQUENTIAL_PROTOCOL_VERSION",
     "CalibrationRefinement",
     "DesignCell",
+    "DiagnosticDistribution",
     "ExperimentSpendCaps",
     "GateStatus",
     "MetricDirection",
+    "ScenarioCalibrationResult",
+    "SequentialCalibrationReport",
+    "SequentialCalibrationScenario",
+    "SequentialFamilyDecision",
+    "SequentialFeasibilityDiagnostics",
     "SequentialGateConfig",
     "SequentialGateDecision",
     "calibration_refinement_plan",
+    "evaluate_sequential_family",
     "evaluate_sequential_gate",
     "paired_block_order",
     "select_farthest_cells",
+    "sequential_gate_feasibility",
+    "sequential_gate_monte_carlo",
     "symmetric_improvement",
 ]

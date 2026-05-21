@@ -56,6 +56,10 @@ from fissionspec.baselines import (
     SPECTREHybridScheduler,
     assert_semantic_equivalence,
 )
+from fissionspec.experiment_design import (
+    sequential_gate_feasibility,
+    sequential_gate_monte_carlo,
+)
 from fissionspec.fidelity import (
     ContextCostModel,
     FidelityConfig,
@@ -96,6 +100,7 @@ from fissionspec.rng import CounterRNG
 from fissionspec.simulator import simulate
 from fissionspec.statistics import (
     bonferroni_metadata,
+    one_sample_cluster_mean_interval,
     paired_cluster_bootstrap,
     paired_effect_size,
 )
@@ -109,7 +114,7 @@ from fissionspec.workload_generators import (
     workload_from_arrivals,
 )
 
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 WARNING: Final = SIMULATION_WARNING
 CLAIM_BOUNDARY: Final = (
     "All values are deterministic CPU simulation/model outputs. They do not "
@@ -139,6 +144,7 @@ IMPLEMENTATION_PATHS: Final = (
     "src/fissionspec/artifacts.py",
     "src/fissionspec/baselines.py",
     "src/fissionspec/fidelity.py",
+    "src/fissionspec/experiment_design.py",
     "src/fissionspec/general_oracle.py",
     "src/fissionspec/metrics.py",
     "src/fissionspec/policies.py",
@@ -226,6 +232,7 @@ class ModeConfig:
     seeds: tuple[int, ...]
     request_count: int
     bootstrap_resamples: int
+    sequential_monte_carlo_trials: int
     oracle_jobs: int
 
     def __post_init__(self) -> None:
@@ -233,7 +240,12 @@ class ModeConfig:
             raise ValueError("mode must be 'ci' or 'full'")
         if len(self.seeds) < 2 or len(self.seeds) != len(set(self.seeds)):
             raise ValueError("mode needs at least two distinct paired seeds")
-        for field_name in ("request_count", "bootstrap_resamples", "oracle_jobs"):
+        for field_name in (
+            "request_count",
+            "bootstrap_resamples",
+            "sequential_monte_carlo_trials",
+            "oracle_jobs",
+        ):
             value = getattr(self, field_name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{field_name} must be a positive integer")
@@ -250,6 +262,7 @@ def mode_config(mode: StudyMode) -> ModeConfig:
             seeds=(0, 1),
             request_count=6,
             bootstrap_resamples=100,
+            sequential_monte_carlo_trials=100,
             oracle_jobs=4,
         )
     if mode == "full":
@@ -257,7 +270,8 @@ def mode_config(mode: StudyMode) -> ModeConfig:
             mode="full",
             seeds=tuple(range(30)),
             request_count=16,
-            bootstrap_resamples=2_000,
+            bootstrap_resamples=20_000,
+            sequential_monte_carlo_trials=2_000,
             oracle_jobs=6,
         )
     raise ValueError(f"unknown mode: {mode!r}")
@@ -1074,7 +1088,7 @@ def _uncertainty_document(
         )
         for metric in ("cache_hit_rate", "p95_ttft_ms", "terminal_failed_jobs"):
             values = {str(row["cluster_id"]): (float(row[metric]),) for row in cell_rows}
-            interval = paired_cluster_bootstrap(
+            interval = one_sample_cluster_mean_interval(
                 values,
                 confidence_level=0.95,
                 resamples=config.bootstrap_resamples,
@@ -1099,6 +1113,25 @@ def _uncertainty_document(
         "multiplicity": multiplicity.as_dict(),
         "comparisons": comparisons,
         "fidelity_cell_intervals": fidelity_intervals,
+    }
+
+
+def _sequential_inference_document(config: ModeConfig) -> JsonObject:
+    """Return frozen pre-GPU feasibility and calibration diagnostics."""
+
+    feasibility = sequential_gate_feasibility()
+    calibration = sequential_gate_monte_carlo(
+        trials=config.sequential_monte_carlo_trials,
+        seed=f"cpu-completion/sequential-calibration/{config.mode}/v2",
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "evidence_class": "pre-gpu-sequential-inference-diagnostic",
+        "measurement_warning": WARNING,
+        "claim_boundary": CLAIM_BOUNDARY,
+        "uses_accelerator_observations": False,
+        "feasibility": feasibility.as_dict(),
+        "monte_carlo": calibration.as_dict(),
     }
 
 
@@ -1595,6 +1628,7 @@ def _summary_markdown(
     oracle: JsonObject,
     uncertainty: JsonObject,
     adversarial: JsonObject,
+    sequential_inference: JsonObject,
 ) -> bytes:
     cell_by_id = {cell.cell_id: cell for cell in design_cells()}
     raw_comparisons = uncertainty["comparisons"]
@@ -1635,6 +1669,9 @@ def _summary_markdown(
         "Bonferroni-declared family. Training cells and non-headline policies are",
         "exploratory. `uncertainty.json` contains effect sizes, interval metadata,",
         "RNG provenance, and resample fingerprints.",
+        f"The full mode freezes `{config.bootstrap_resamples:,}` bootstrap resamples; "
+        "at the 99.7222% headline level this places about 27.8 draws in each "
+        "Monte Carlo tail. That is finite resampling resolution, not an exact tail.",
         "",
         "## Validation headline: H2 versus barrier",
         "",
@@ -1680,6 +1717,11 @@ def _summary_markdown(
             f"`{min(fidelity_ttft):.6g}` to `{max(fidelity_ttft):.6g}` ms.",
             f"- Exact generalized-oracle certificates: {len(raw_oracle_rows)}.",
             f"- Deterministic adversarial witnesses reproduced: {len(raw_cases)}.",
+            f"- Sequential calibration trials per scenario/family audit: "
+            f"{config.sequential_monte_carlo_trials:,}.",
+            "- `sequential_inference.json` quantifies the variance threshold for "
+            "the assumption-bounded primary rule and retains a distribution-free "
+            "sensitivity audit.",
             "",
             "## Reproduction",
             "",
@@ -1691,7 +1733,9 @@ def _summary_markdown(
             "",
             "Every event/request trace is retained in deterministic `traces.jsonl.gz`.",
             "The manifest hashes every artifact. Wall-clock runtime is printed by the",
-            "driver but excluded from the bundle so golden reruns are byte-identical.",
+            "driver but excluded from the bundle. Golden reruns are byte-identical",
+            "under the same pinned Python/runtime/platform; cross-platform identity",
+            "is checked explicitly rather than assumed.",
             "",
         ]
     )
@@ -1764,6 +1808,7 @@ def run_study(
         )
     )
     uncertainty = _uncertainty_document(metric_rows, fidelity_rows, config)
+    sequential_inference = _sequential_inference_document(config)
     oracle = _oracle_document(config)
     adversarial = _adversarial_document()
     design: JsonObject = {
@@ -1825,6 +1870,7 @@ def run_study(
         "metrics.csv": _csv_bytes(metric_rows, METRIC_COLUMNS),
         "fidelity_metrics.csv": _csv_bytes(fidelity_rows, FIDELITY_COLUMNS),
         "uncertainty.json": canonical_json_bytes(_jsonable(uncertainty)),
+        "sequential_inference.json": canonical_json_bytes(_jsonable(sequential_inference)),
         "oracle.json": canonical_json_bytes(_jsonable(oracle)),
         "adversarial.json": canonical_json_bytes(_jsonable(adversarial)),
         "traces.jsonl.gz": _gzip_jsonl(trace_records),
@@ -1836,6 +1882,7 @@ def run_study(
             oracle,
             uncertainty,
             adversarial,
+            sequential_inference,
         ),
     }
     output = output_dir.resolve()

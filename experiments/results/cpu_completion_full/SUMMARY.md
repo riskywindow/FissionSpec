@@ -22,6 +22,7 @@ Validation headline intervals use paired seed/trace clusters and a
 Bonferroni-declared family. Training cells and non-headline policies are
 exploratory. `uncertainty.json` contains effect sizes, interval metadata,
 RNG provenance, and resample fingerprints.
+The full mode freezes `20,000` bootstrap resamples; at the 99.7222% headline level this places about 27.8 draws in each Monte Carlo tail. That is finite resampling resolution, not an exact tail.
 
 ## Validation headline: H2 versus barrier
 
@@ -31,23 +32,23 @@ validation family. They quantify paired simulator-seed variation only.
 
 | workload | metric | paired mean improvement | simultaneous interval | clusters |
 |---|---|---:|---:|---:|
-| synchronized | throughput tokens/s | -92.9625 | [-139.028, -43.8205] | 30 |
-| synchronized | p95 request latency ms | -0.968333 | [-2.10765, +0.137208] | 30 |
+| synchronized | throughput tokens/s | -92.9625 | [-139.968, -42.9806] | 30 |
+| synchronized | p95 request latency ms | -0.968333 | [-2.11587, +0.18825] | 30 |
 | synchronized | deadline-miss fraction | +0 | [+0, +0] | 30 |
-| poisson | throughput tokens/s | +99.0232 | [+31.9516, +172.379] | 30 |
-| poisson | p95 request latency ms | +1.71555 | [+1.03886, +2.42783] | 30 |
+| poisson | throughput tokens/s | +99.0232 | [+40.6092, +172.544] | 30 |
+| poisson | p95 request latency ms | +1.71555 | [+1.02853, +2.42888] | 30 |
 | poisson | deadline-miss fraction | +0 | [+0, +0] | 30 |
-| mmpp-exact | throughput tokens/s | -29.8898 | [-107.503, +56.732] | 30 |
-| mmpp-exact | p95 request latency ms | +5.3512 | [+2.49122, +8.05017] | 30 |
+| mmpp-exact | throughput tokens/s | -29.8898 | [-109.208, +56.2769] | 30 |
+| mmpp-exact | p95 request latency ms | +5.3512 | [+2.44048, +8.16093] | 30 |
 | mmpp-exact | deadline-miss fraction | +0 | [+0, +0] | 30 |
-| pareto-heavy-tail | throughput tokens/s | -448.913 | [-500.58, -391.343] | 30 |
-| pareto-heavy-tail | p95 request latency ms | -6.22743 | [-7.8429, -4.5481] | 30 |
+| pareto-heavy-tail | throughput tokens/s | -448.913 | [-501.3, -390.719] | 30 |
+| pareto-heavy-tail | p95 request latency ms | -6.22743 | [-7.87202, -4.42819] | 30 |
 | pareto-heavy-tail | deadline-miss fraction | +0 | [+0, +0] | 30 |
-| heterogeneous | throughput tokens/s | +85.5347 | [+23.1264, +145.814] | 30 |
-| heterogeneous | p95 request latency ms | +2.87532 | [+1.73636, +4.15711] | 30 |
+| heterogeneous | throughput tokens/s | +85.5347 | [+22.3929, +144.21] | 30 |
+| heterogeneous | p95 request latency ms | +2.87532 | [+1.76231, +4.10717] | 30 |
 | heterogeneous | deadline-miss fraction | +0 | [+0, +0] | 30 |
-| trace-replay | throughput tokens/s | +46.963 | [+28.8264, +64.9354] | 30 |
-| trace-replay | p95 request latency ms | +1.68704 | [+1.00532, +2.39723] | 30 |
+| trace-replay | throughput tokens/s | +46.963 | [+28.8201, +66.1122] | 30 |
+| trace-replay | p95 request latency ms | +1.68704 | [+1.05747, +2.36758] | 30 |
 | trace-replay | deadline-miss fraction | +0 | [+0, +0] | 30 |
 
 These model outcomes do not support universal H2 dominance: the signed
@@ -60,6 +61,8 @@ preserved rather than filtered.
 - Fidelity p95 TTFT observations span `1.86748` to `28.505` ms.
 - Exact generalized-oracle certificates: 6.
 - Deterministic adversarial witnesses reproduced: 3.
+- Sequential calibration trials per scenario/family audit: 2,000.
+- `sequential_inference.json` quantifies the variance threshold for the assumption-bounded primary rule and retains a distribution-free sensitivity audit.
 
 ## Reproduction
 
@@ -71,4 +74,6 @@ PYTHONPATH=src python experiments/run_cpu_completion_study.py --verify-only \
 
 Every event/request trace is retained in deterministic `traces.jsonl.gz`.
 The manifest hashes every artifact. Wall-clock runtime is printed by the
-driver but excluded from the bundle so golden reruns are byte-identical.
+driver but excluded from the bundle. Golden reruns are byte-identical
+under the same pinned Python/runtime/platform; cross-platform identity
+is checked explicitly rather than assumed.

@@ -3,14 +3,21 @@ from __future__ import annotations
 import unittest
 
 from fissionspec.experiment_design import (
+    PRIMARY_FAMILY_ID,
+    PRIMARY_HYPOTHESIS_IDS,
+    SEQUENTIAL_PROTOCOL_VERSION,
     DesignCell,
     ExperimentSpendCaps,
     GateStatus,
     SequentialGateConfig,
+    SequentialGateDecision,
     calibration_refinement_plan,
+    evaluate_sequential_family,
     evaluate_sequential_gate,
     paired_block_order,
     select_farthest_cells,
+    sequential_gate_feasibility,
+    sequential_gate_monte_carlo,
     symmetric_improvement,
 )
 
@@ -44,38 +51,54 @@ class BoundedMetricTests(unittest.TestCase):
 
 
 class SequentialGateTests(unittest.TestCase):
+    @staticmethod
+    def _evaluate(
+        values: tuple[float, ...],
+        config: SequentialGateConfig,
+    ) -> SequentialGateDecision:
+        return evaluate_sequential_gate(
+            values,
+            config,
+            hypothesis_id=config.hypothesis_ids[0],
+            observed_family_id=config.family_id,
+            observed_hypothesis_ids=config.hypothesis_ids,
+        )
+
     def test_only_predeclared_looks_are_evaluated(self) -> None:
         config = SequentialGateConfig(minimum_blocks=10, maximum_blocks=20, look_every=5)
         self.assertEqual(
-            evaluate_sequential_gate((0.1,) * 9, config).status,
+            self._evaluate((0.1,) * 9, config).status,
             GateStatus.NOT_A_LOOK,
         )
         self.assertEqual(
-            evaluate_sequential_gate((0.1,) * 11, config).status,
+            self._evaluate((0.1,) * 11, config).status,
             GateStatus.NOT_A_LOOK,
         )
-        self.assertIsNotNone(evaluate_sequential_gate((0.1,) * 10, config).interval)
+        decision = self._evaluate((0.1,) * 10, config)
+        self.assertIsNotNone(decision.interval)
+        self.assertIsNotNone(decision.distribution_free_sensitivity)
+        self.assertEqual(decision.protocol_version, SEQUENTIAL_PROTOCOL_VERSION)
 
     def test_efficacy_futility_and_max_are_deterministic(self) -> None:
-        # Relaxed confidence is used only to exercise the finite test boundary.
         config = SequentialGateConfig(
-            minimum_blocks=100,
-            maximum_blocks=200,
-            look_every=50,
-            confidence_level=0.5,
+            family_id="test-family",
+            hypothesis_ids=("h1",),
+            minimum_blocks=10,
+            maximum_blocks=20,
+            look_every=5,
             target_half_width=0.01,
             minimum_worthwhile_improvement=0.03,
         )
-        efficacy = evaluate_sequential_gate((0.9,) * 100, config)
+        efficacy = self._evaluate((0.1,) * 10, config)
         self.assertEqual(efficacy.status, GateStatus.EFFICACY)
         self.assertTrue(efficacy.terminal)
 
-        futility = evaluate_sequential_gate((-0.9,) * 100, config)
+        futility = self._evaluate((0.0,) * 10, config)
         self.assertEqual(futility.status, GateStatus.FUTILITY)
         self.assertTrue(futility.terminal)
 
-        maximum = evaluate_sequential_gate(
-            tuple(-0.5 if index % 2 else 0.5 for index in range(200)),
+        maximum = self._evaluate(
+            tuple(-0.5 if index % 2 else 0.5 for index in range(20)),
             config,
         )
         self.assertEqual(maximum.status, GateStatus.MAXIMUM_REACHED)
@@ -84,47 +107,50 @@ class SequentialGateTests(unittest.TestCase):
     def test_observations_cannot_exceed_cap_or_bounds(self) -> None:
         config = SequentialGateConfig(minimum_blocks=5, maximum_blocks=10, look_every=5)
         with self.assertRaises(ValueError):
-            evaluate_sequential_gate((0.0,) * 11, config)
+            self._evaluate((0.0,) * 11, config)
         with self.assertRaises(ValueError):
-            evaluate_sequential_gate((2.0,) * 5, config)
+            self._evaluate((2.0,) * 5, config)
 
     def test_all_nontrivial_terminal_boundaries_are_disjoint(self) -> None:
         positive_but_small = SequentialGateConfig(
-            minimum_blocks=1000,
-            maximum_blocks=2000,
-            look_every=1000,
-            confidence_level=0.5,
+            family_id="positive-small",
+            hypothesis_ids=("h1",),
+            minimum_blocks=10,
+            maximum_blocks=20,
+            look_every=10,
             target_half_width=0.01,
-            minimum_worthwhile_improvement=0.8,
+            minimum_worthwhile_improvement=0.03,
         )
         self.assertEqual(
-            evaluate_sequential_gate((0.5,) * 1000, positive_but_small).status,
+            self._evaluate((0.01,) * 10, positive_but_small).status,
             GateStatus.POSITIVE_BELOW_MWI,
         )
 
         precise = SequentialGateConfig(
-            minimum_blocks=100,
-            maximum_blocks=200,
-            look_every=100,
-            confidence_level=0.5,
-            target_half_width=1.0,
+            family_id="precise",
+            hypothesis_ids=("h1",),
+            minimum_blocks=10,
+            maximum_blocks=20,
+            look_every=10,
+            target_half_width=0.01,
             minimum_worthwhile_improvement=0.03,
         )
-        balanced = tuple(-0.5 if index % 2 else 0.5 for index in range(100))
         self.assertEqual(
-            evaluate_sequential_gate(balanced, precise).status,
+            self._evaluate((0.03,) * 10, precise).status,
             GateStatus.PRECISE_INCONCLUSIVE,
         )
 
         continuing = SequentialGateConfig(
-            minimum_blocks=100,
-            maximum_blocks=200,
-            look_every=100,
-            confidence_level=0.5,
+            family_id="continuing",
+            hypothesis_ids=("h1",),
+            minimum_blocks=10,
+            maximum_blocks=20,
+            look_every=10,
             target_half_width=0.01,
             minimum_worthwhile_improvement=0.03,
         )
-        decision = evaluate_sequential_gate(balanced, continuing)
+        balanced = tuple(-0.5 if index % 2 else 0.5 for index in range(10))
+        decision = self._evaluate(balanced, continuing)
         self.assertEqual(decision.status, GateStatus.CONTINUE)
         self.assertFalse(decision.terminal)
 
@@ -134,12 +160,115 @@ class SequentialGateTests(unittest.TestCase):
             {"minimum_blocks": 10, "maximum_blocks": 5},
             {"minimum_blocks": 9, "look_every": 5},
             {"maximum_blocks": 11, "look_every": 5},
-            {"confidence_level": 1.0},
+            {"familywise_alpha": 1.0},
             {"target_half_width": 0.0},
             {"minimum_worthwhile_improvement": 1.1},
+            {"protocol_version": 1},
+            {"hypothesis_ids": ("duplicate", "duplicate")},
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 SequentialGateConfig(**kwargs)
+
+    def test_default_family_is_exactly_registered_and_mismatch_fails_closed(self) -> None:
+        config = SequentialGateConfig()
+        self.assertEqual(config.family_id, PRIMARY_FAMILY_ID)
+        self.assertEqual(config.hypothesis_ids, PRIMARY_HYPOTHESIS_IDS)
+        self.assertEqual(len(config.hypothesis_ids), 24)
+        self.assertAlmostEqual(config.per_interval_alpha, 0.05 / (24 * 9))
+        with self.assertRaisesRegex(ValueError, "family_id"):
+            evaluate_sequential_gate(
+                (0.0,) * 10,
+                config,
+                hypothesis_id=config.hypothesis_ids[0],
+                observed_family_id="wrong-family",
+                observed_hypothesis_ids=config.hypothesis_ids,
+            )
+        with self.assertRaisesRegex(ValueError, "hypothesis_ids"):
+            evaluate_sequential_gate(
+                (0.0,) * 10,
+                config,
+                hypothesis_id=config.hypothesis_ids[0],
+                observed_family_id=config.family_id,
+                observed_hypothesis_ids=tuple(reversed(config.hypothesis_ids)),
+            )
+
+    def test_synchronized_family_gate_is_conjunctive_and_complete(self) -> None:
+        config = SequentialGateConfig(
+            family_id="two-endpoint-family",
+            hypothesis_ids=("h1", "h2"),
+            minimum_blocks=10,
+            maximum_blocks=20,
+            look_every=5,
+        )
+        efficacy = evaluate_sequential_family(
+            {"h1": (0.1,) * 10, "h2": (0.2,) * 10},
+            config,
+            observed_family_id=config.family_id,
+            observed_hypothesis_ids=config.hypothesis_ids,
+        )
+        self.assertEqual(efficacy.status, GateStatus.EFFICACY)
+        self.assertTrue(efficacy.terminal)
+        futility = evaluate_sequential_family(
+            {"h1": (0.1,) * 10, "h2": (0.0,) * 10},
+            config,
+            observed_family_id=config.family_id,
+            observed_hypothesis_ids=config.hypothesis_ids,
+        )
+        self.assertEqual(futility.status, GateStatus.FUTILITY)
+        self.assertTrue(futility.terminal)
+        with self.assertRaisesRegex(ValueError, "exactly cover"):
+            evaluate_sequential_family(
+                {"h1": (0.1,) * 10},
+                config,
+                observed_family_id=config.family_id,
+                observed_hypothesis_ids=config.hypothesis_ids,
+            )
+        with self.assertRaisesRegex(ValueError, "same completed"):
+            evaluate_sequential_family(
+                {"h1": (0.1,) * 10, "h2": (0.1,) * 15},
+                config,
+                observed_family_id=config.family_id,
+                observed_hypothesis_ids=config.hypothesis_ids,
+            )
+
+    def test_feasibility_quantifies_old_impossibility_and_new_variance_boundary(self) -> None:
+        diagnostics = sequential_gate_feasibility()
+
+        self.assertGreater(
+            diagnostics.original_endpointwise_hoeffding_radius_at_maximum,
+            diagnostics.target_half_width,
+        )
+        self.assertGreater(
+            diagnostics.familywise_hoeffding_radius_at_maximum,
+            diagnostics.target_half_width,
+        )
+        maximum_sd = dict(diagnostics.maximum_sd_for_target_half_width)[50]
+        self.assertGreater(maximum_sd, 0.04)
+        self.assertLess(maximum_sd, 0.06)
+
+    def test_monte_carlo_is_deterministic_and_exposes_assumption_boundary(self) -> None:
+        first = sequential_gate_monte_carlo(trials=100, seed="gate-mc-test")
+        repeated = sequential_gate_monte_carlo(trials=100, seed="gate-mc-test")
+        self.assertEqual(first, repeated)
+        self.assertLessEqual(first.normal_null_familywise_noncoverage_rate, 0.10)
+        self.assertLessEqual(first.normal_null_any_false_positive_rate, 0.10)
+        by_name = {scenario.name: scenario for scenario in first.scenarios}
+        self.assertGreaterEqual(
+            by_name["null-normal"].primary_all_look_coverage_rate,
+            0.95,
+        )
+        self.assertGreaterEqual(
+            by_name["adversarial-skewed-null"].sensitivity_all_look_coverage_rate,
+            0.95,
+        )
+        self.assertLess(
+            by_name["adversarial-skewed-null"].primary_all_look_coverage_rate,
+            0.90,
+        )
+        low_variance_rates = dict(by_name["worthwhile-low-variance"].stop_rates)
+        self.assertGreater(low_variance_rates[GateStatus.EFFICACY.value], 0.8)
+        high_variance_rates = dict(by_name["worthwhile-high-variance"].stop_rates)
+        self.assertGreater(high_variance_rates[GateStatus.MAXIMUM_REACHED.value], 0.5)
 
 
 class SpendCapTests(unittest.TestCase):

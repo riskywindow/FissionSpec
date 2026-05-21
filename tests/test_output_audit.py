@@ -447,6 +447,16 @@ class StatisticalAndPreregistrationTests(unittest.TestCase):
         self.assertEqual(family["inferential_tests"], 4)
         self.assertAlmostEqual(cast(float, family["per_test_alpha"]), 0.0125)
         self.assertEqual(len(cast(list[str], family["members"])), 4)
+        for metric in ("mean_total_variation", "mean_jensen_shannon"):
+            interval = cast(dict[str, object], uncertainty[metric])
+            self.assertEqual(
+                interval["method"],
+                "one-sample-percentile-cluster-mean-bootstrap",
+            )
+            self.assertEqual(
+                interval["estimand"],
+                "equally weighted mean of within-cluster observations",
+            )
 
     def test_threshold_mapping_is_complete_strict_and_hash_locked(self) -> None:
         original = AuditThresholds()

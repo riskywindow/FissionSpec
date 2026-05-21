@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Final, Literal, cast
 
 from fissionspec.artifacts import canonical_json_bytes, sha256_document
-from fissionspec.statistics import paired_cluster_bootstrap
+from fissionspec.statistics import one_sample_cluster_mean_interval
 
 CORPUS_SCHEMA: Final = "fissionspec.output-audit-corpus.v1"
 REPORT_SCHEMA: Final = "fissionspec.output-audit-report.v1"
@@ -905,17 +905,17 @@ def audit_corpus(
         len(diagnostics),
         alpha=per_test_alpha,
     )
-    tv_bootstrap = paired_cluster_bootstrap(
+    tv_bootstrap = one_sample_cluster_mean_interval(
         _cluster_values(diagnostics, "total_variation"),
         confidence_level=adjusted_confidence,
         resamples=preregistration.bootstrap_resamples,
-        seed=f"fissionspec-output-audit/{corpus_sha256}/total-variation/v1",
+        seed=f"fissionspec-output-audit/{corpus_sha256}/total-variation/one-sample-v1",
     ).as_dict()
-    js_bootstrap = paired_cluster_bootstrap(
+    js_bootstrap = one_sample_cluster_mean_interval(
         _cluster_values(diagnostics, "jensen_shannon"),
         confidence_level=adjusted_confidence,
         resamples=preregistration.bootstrap_resamples,
-        seed=f"fissionspec-output-audit/{corpus_sha256}/jensen-shannon/v1",
+        seed=f"fissionspec-output-audit/{corpus_sha256}/jensen-shannon/one-sample-v1",
     ).as_dict()
     uncertainty = {
         "family": {
