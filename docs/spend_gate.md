@@ -40,6 +40,12 @@ cost remains a reporting field outside this module because provider prices,
 discounts, and reservation terms are time-varying; the resource cap is
 provider independent.
 
+`CampaignLedger.from_document` is the inverse fail-closed boundary. It verifies
+the payload hash, exact nested schemas, enum values, replay/resource caps,
+contiguous stage history, and every derived field before returning executable
+authorization state. Rehashing a contradictory `next_stage`, spend total, or
+campaign ID is rejected rather than trusted.
+
 This guardrail cannot prevent an operator from bypassing the software. The
 production launcher must require a ledger whose `next_stage`, sealed budget,
 protocol hash, and code commit match the submitted job.

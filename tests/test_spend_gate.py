@@ -6,6 +6,7 @@ import hashlib
 import json
 import unittest
 from dataclasses import replace
+from typing import cast
 
 from fissionspec.spend_gate import (
     CampaignLedger,
@@ -72,9 +73,13 @@ class CampaignPlanTests(unittest.TestCase):
             "planned_unique_ablation_replays": 300,
             "planned_robustness_cells": 12,
         }
+        trace_hashes = cast(
+            tuple[tuple[str, str], ...],
+            base["validation_trace_hashes"],
+        )
         for override in (
             {"protocol_sha256": "not-a-hash"},
-            {"validation_trace_hashes": tuple(reversed(base["validation_trace_hashes"]))},
+            {"validation_trace_hashes": tuple(reversed(trace_hashes))},
             {"planned_primary_replays": 1201},
             {"planned_unique_ablation_replays": 301},
             {"planned_robustness_cells": 13},
@@ -173,6 +178,60 @@ class CampaignLedgerTests(unittest.TestCase):
         ).hexdigest()
         self.assertEqual(document["payload_sha256"], expected)
         self.assertEqual(document, ledger.document())
+        self.assertEqual(
+            CampaignLedger.from_document(json.loads(json.dumps(document))),
+            ledger,
+        )
+
+    def test_document_decoder_rejects_unknown_tampered_and_derived_fields(self) -> None:
+        ledger = CampaignLedger(_plan()).record_gate(_record(CampaignStage.CPU_RELEASE))
+        document = ledger.document()
+        with (
+            self.subTest("unknown field"),
+            self.assertRaisesRegex(ValueError, "unexpected or missing"),
+        ):
+            CampaignLedger.from_document({**document, "escape_hatch": True})
+
+        tampered = json.loads(json.dumps(document))
+        tampered["plan"]["planned_primary_replays"] = 1199
+        with (
+            self.subTest("stale hash"),
+            self.assertRaisesRegex(ValueError, "payload hash mismatch"),
+        ):
+            CampaignLedger.from_document(tampered)
+
+        inconsistent = json.loads(json.dumps(document))
+        inconsistent["next_stage"] = CampaignStage.MECHANISM.value
+        payload = {key: value for key, value in inconsistent.items() if key != "payload_sha256"}
+        inconsistent["payload_sha256"] = hashlib.sha256(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode()
+        ).hexdigest()
+        with (
+            self.subTest("rehashed derived field"),
+            self.assertRaisesRegex(ValueError, "derived fields"),
+        ):
+            CampaignLedger.from_document(inconsistent)
+
+    def test_nested_document_decoders_are_closed(self) -> None:
+        document = CampaignLedger(_plan()).document()
+        plan = json.loads(json.dumps(document["plan"]))
+        plan["unregistered"] = 1
+        with self.assertRaisesRegex(ValueError, "unexpected or missing"):
+            CampaignPlan.from_mapping(plan)
+        with self.assertRaisesRegex(ValueError, "string pair"):
+            encoded_plan = cast(dict[str, object], document["plan"])
+            CampaignPlan.from_mapping(
+                {
+                    **encoded_plan,
+                    "validation_trace_hashes": [["V1", "4" * 64, "extra"]],
+                }
+            )
 
     def test_cpu_gate_and_budget_value_validation(self) -> None:
         with self.assertRaises(ValueError):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import cast
@@ -72,6 +73,20 @@ def _canonical_bytes(payload: object) -> bytes:
     ).encode("utf-8")
 
 
+def _closed_mapping(
+    value: object,
+    *,
+    field: str,
+    keys: set[str],
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        raise ValueError(f"{field} must be an object")
+    normalized = cast(Mapping[str, object], value)
+    if set(normalized) != keys:
+        raise ValueError(f"{field} has unexpected or missing fields")
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class CampaignPlan:
     """Immutable hashes and replay counts frozen before Stage F1."""
@@ -117,6 +132,54 @@ class CampaignPlan:
     def campaign_id(self) -> str:
         return hashlib.sha256(_canonical_bytes(asdict(self))).hexdigest()
 
+    @classmethod
+    def from_mapping(cls, value: object) -> CampaignPlan:
+        """Decode a closed JSON-compatible plan mapping."""
+
+        source = _closed_mapping(
+            value,
+            field="plan",
+            keys={
+                "protocol_sha256",
+                "code_commit",
+                "cpu_artifact_sha256",
+                "validation_trace_hashes",
+                "planned_primary_replays",
+                "planned_unique_ablation_replays",
+                "planned_robustness_cells",
+                "schema_version",
+            },
+        )
+        raw_hashes = source["validation_trace_hashes"]
+        if isinstance(raw_hashes, (str, bytes)) or not isinstance(raw_hashes, Sequence):
+            raise ValueError("plan validation_trace_hashes must be an array")
+        hashes: list[tuple[str, str]] = []
+        for index, item in enumerate(raw_hashes):
+            if (
+                isinstance(item, (str, bytes))
+                or not isinstance(item, Sequence)
+                or len(item) != 2
+                or not isinstance(item[0], str)
+                or not isinstance(item[1], str)
+            ):
+                raise ValueError(f"plan validation_trace_hashes[{index}] must be a string pair")
+            hashes.append((item[0], item[1]))
+        try:
+            return cls(
+                protocol_sha256=cast(str, source["protocol_sha256"]),
+                code_commit=cast(str, source["code_commit"]),
+                cpu_artifact_sha256=cast(str, source["cpu_artifact_sha256"]),
+                validation_trace_hashes=tuple(hashes),
+                planned_primary_replays=cast(int, source["planned_primary_replays"]),
+                planned_unique_ablation_replays=cast(
+                    int, source["planned_unique_ablation_replays"]
+                ),
+                planned_robustness_cells=cast(int, source["planned_robustness_cells"]),
+                schema_version=cast(int, source["schema_version"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("plan is invalid") from error
+
 
 @dataclass(frozen=True, slots=True)
 class StageBudget:
@@ -135,6 +198,30 @@ class StageBudget:
         if self.max_gpu_seconds == 0 or self.max_replays == 0:
             raise ValueError("an accelerator-stage budget must authorize positive bounded work")
         _digest(self.rationale_sha256, field="rationale_sha256")
+
+    @classmethod
+    def from_mapping(cls, value: object) -> StageBudget:
+        """Decode a closed JSON-compatible budget mapping."""
+
+        source = _closed_mapping(
+            value,
+            field="budget",
+            keys={
+                "stage",
+                "max_gpu_seconds",
+                "max_replays",
+                "rationale_sha256",
+            },
+        )
+        try:
+            return cls(
+                stage=CampaignStage(cast(str, source["stage"])),
+                max_gpu_seconds=cast(int, source["max_gpu_seconds"]),
+                max_replays=cast(int, source["max_replays"]),
+                rationale_sha256=cast(str, source["rationale_sha256"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("budget is invalid") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +246,32 @@ class GateRecord:
             self.used_gpu_seconds != 0 or self.completed_replays != 0
         ):
             raise ValueError("the CPU release gate cannot consume GPU work")
+
+    @classmethod
+    def from_mapping(cls, value: object) -> GateRecord:
+        """Decode a closed JSON-compatible terminal gate record."""
+
+        source = _closed_mapping(
+            value,
+            field="record",
+            keys={
+                "stage",
+                "verdict",
+                "used_gpu_seconds",
+                "completed_replays",
+                "evidence_sha256",
+            },
+        )
+        try:
+            return cls(
+                stage=CampaignStage(cast(str, source["stage"])),
+                verdict=GateVerdict(cast(str, source["verdict"])),
+                used_gpu_seconds=cast(int, source["used_gpu_seconds"]),
+                completed_replays=cast(int, source["completed_replays"]),
+                evidence_sha256=cast(str, source["evidence_sha256"]),
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("record is invalid") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +380,50 @@ class CampaignLedger:
         }
         digest = hashlib.sha256(_canonical_bytes(payload)).hexdigest()
         return cast(dict[str, object], {**payload, "payload_sha256": digest})
+
+    @classmethod
+    def from_document(cls, value: object) -> CampaignLedger:
+        """Verify and decode a closed, self-hashed ledger document."""
+
+        document = _closed_mapping(
+            value,
+            field="ledger",
+            keys={
+                "schema",
+                "plan",
+                "campaign_id",
+                "budgets",
+                "records",
+                "next_stage",
+                "spent_gpu_seconds",
+                "currently_authorized_gpu_seconds",
+                "payload_sha256",
+            },
+        )
+        supplied_hash = _digest(
+            document["payload_sha256"],
+            field="payload_sha256",
+        )
+        payload = dict(document)
+        payload.pop("payload_sha256")
+        if hashlib.sha256(_canonical_bytes(payload)).hexdigest() != supplied_hash:
+            raise ValueError("ledger payload hash mismatch")
+        if document["schema"] != "fissionspec.accelerator-campaign-ledger.v1":
+            raise ValueError("unsupported ledger schema")
+        raw_budgets = document["budgets"]
+        raw_records = document["records"]
+        if isinstance(raw_budgets, (str, bytes)) or not isinstance(raw_budgets, Sequence):
+            raise ValueError("ledger budgets must be an array")
+        if isinstance(raw_records, (str, bytes)) or not isinstance(raw_records, Sequence):
+            raise ValueError("ledger records must be an array")
+        ledger = cls(
+            plan=CampaignPlan.from_mapping(document["plan"]),
+            budgets=tuple(StageBudget.from_mapping(item) for item in raw_budgets),
+            records=tuple(GateRecord.from_mapping(item) for item in raw_records),
+        )
+        if _canonical_bytes(ledger.document()) != _canonical_bytes(document):
+            raise ValueError("ledger derived fields or canonical state are inconsistent")
+        return ledger
 
 
 __all__ = [
