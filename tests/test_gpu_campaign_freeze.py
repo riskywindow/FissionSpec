@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from tools.freeze_gpu_campaign import (
     _canonical_bytes,
     _evidence_records,
     _self_hashed,
+    _validate_commit,
     freeze_bundle,
     verify_bundle,
 )
@@ -102,6 +104,17 @@ def _rehash_spend_document(document: dict[str, object]) -> dict[str, object]:
     return {**payload, "payload_sha256": _sha256(encoded)}
 
 
+def _git(root: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ("git", *arguments),
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
 def _refresh_bundle_manifest(output_dir: Path, changed_name: str) -> None:
     manifest_path = output_dir / "bundle_manifest.json"
     manifest = cast(dict[str, object], json.loads(manifest_path.read_text()))
@@ -120,6 +133,61 @@ def _refresh_bundle_manifest(output_dir: Path, changed_name: str) -> None:
 
 
 class CampaignFreezeTests(unittest.TestCase):
+    def test_real_git_commit_binding_and_dirty_tree_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, evidence = _fake_repository(Path(temporary))
+            _git(root, "init", "--quiet")
+            _git(root, "config", "user.name", "Campaign Freeze Test")
+            _git(root, "config", "user.email", "campaign-freeze@example.invalid")
+            _git(root, "add", ".")
+            _git(root, "commit", "--quiet", "-m", "frozen CPU source")
+            source_commit = _git(root, "rev-parse", "HEAD")
+            output = root / "configs/gpu_campaign"
+
+            freeze_bundle(
+                root,
+                output,
+                code_commit=source_commit,
+                evidence=evidence,
+                enforce_git=True,
+            )
+            verify_bundle(
+                root,
+                output,
+                evidence=evidence,
+                enforce_git=True,
+            )
+
+            untracked = _write_bytes(root, "outside-output.txt", b"dirty\n")
+            with self.assertRaisesRegex(CampaignFreezeError, "changes outside"):
+                freeze_bundle(
+                    root,
+                    output,
+                    code_commit=source_commit,
+                    evidence=evidence,
+                    enforce_git=True,
+                )
+            untracked.unlink()
+
+            beta = root / "evidence/beta.txt"
+            beta.write_bytes(b"changed CPU evidence\n")
+            _git(root, "add", "evidence/beta.txt")
+            _git(root, "commit", "--quiet", "-m", "change evidence")
+            with self.assertRaisesRegex(CampaignFreezeError, "differs from code commit"):
+                _validate_commit(
+                    root,
+                    source_commit,
+                    tracked_paths=(Path("evidence/beta.txt"),),
+                )
+            with self.assertRaisesRegex(CampaignFreezeError, "full lowercase"):
+                freeze_bundle(
+                    root,
+                    output,
+                    code_commit=source_commit[:12],
+                    evidence=evidence,
+                    enforce_git=True,
+                )
+
     def test_freeze_is_deterministic_and_authorizes_zero_gpu_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root, evidence = _fake_repository(Path(temporary))
