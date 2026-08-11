@@ -1,15 +1,17 @@
 # FissionSpec
 
-**Outcome-decoupled continuous batching for speculative-speculative LLM serving.**
+**Outcome-decoupled continuous batching for speculative-speculative LLM
+serving.**
 
 > One wrong prediction should not make every correctly predicted request wait—or
 > spend a padded target-model slot.
 
 Speculative-speculative decoding (SSD) overlaps draft generation with target
-verification by preparing continuations for likely verification outcomes. The
-new failure mode appears only when SSD meets online batching: each request hits
-its outcome cache independently, but existing execution policies coordinate the
-next step at batch granularity.
+verification by preparing continuations for likely verification outcomes. When
+SSD meets online batching, each request hits its outcome cache independently,
+but the next step is still commonly coordinated at batch granularity. One miss
+can therefore delay correct hits or retain recovering requests as padded target
+rows.
 
 FissionSpec turns those lookups into per-request scheduling events. Hits may
 immediately enter another target batch; misses recover on the draft side without
@@ -17,23 +19,30 @@ occupying a target row; compatible work is re-fused only when a bounded
 horizon-2 controller predicts that batching efficiency outweighs queueing and
 SLO cost.
 
-This repository is an executable research artifact, not a wrapper around an
-agent framework. It contains:
+This repository is an executable research artifact. It combines scheduling,
+sampling-semantics, and state-ownership models so that the mechanism can be
+tested before committing to an accelerator campaign.
 
-- a dependency-free, deterministic discrete-event simulator for online SSD;
-- an exact rational token-level speculative-sampling oracle for tiny CPU models;
-- a deterministic, randomly initialized no-download neural micro-model fixture;
-- a Saguaro barrier baseline and a labeled SPECTRE parallel-mode component;
-- immediate-fission, fixed-coalescing, and horizon-2 FissionSpec policies;
-- an exact restricted small-trace binary-coalescing oracle;
-- a versioned copy-on-write KV transaction ledger with ABA-safe page handles;
-- a composed coordinator with canonical crash snapshots and injected-fault tests;
-- per-request counter-based randomness for schedule-independent experiments;
-- Poisson, exact MMPP, Pareto, and split-aware hash-linked replay workloads;
-- paired cluster inference, sequential stopping, and power-planning primitives;
-- dependency-free Rust controller/allocator primitives over flattened work units;
-- a calibration format, experiment harness, theory checks, and paper plan; and
-- a narrow integration contract for production PagedAttention engines.
+## Implemented scope
+
+- A dependency-free discrete-event simulator with Saguaro barrier,
+  SPECTRE-style padded-recovery, immediate-fission, fixed-coalescing, and
+  horizon-2 policies.
+- An exact rational token-level speculative-sampling oracle, deterministic CPU
+  neural fixture, and schedule-invariance tests.
+- A versioned copy-on-write KV transaction ledger, ABA-safe page handles, and a
+  coordinator exercised under delayed, duplicated, reordered, dropped, OOM,
+  cancellation, and crash events.
+- Python experiment tooling plus dependency-free Rust controller and allocator
+  primitives over flattened work units.
+- A pinned, opt-in SGLang patch series and structural validator. The repository
+  does not claim that the laptop artifact runs production SGLang kernels.
+
+The current evidence is analytical, exact finite-domain, invariant-model, and
+CPU simulation evidence. It is **not** a GPU speedup or production-serving
+claim. The [claims-to-evidence ledger](paper/claims_evidence.md) records the
+permitted wording and missing gates; [Artifact status](#artifact-status) lists
+the accelerator work that remains.
 
 ## The systems observation
 
